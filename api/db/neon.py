@@ -53,11 +53,18 @@ class DatabaseService:
     _profiles: Dict[str, Dict[str, Any]] = {}
 
     def __init__(self, pool: Optional[asyncpg.Pool] = None):
-        self.pool = pool
+        self._pool = pool
+
+    async def _get_pool(self) -> Optional[asyncpg.Pool]:
+        """Lazily get the connection pool (important for serverless)."""
+        if self._pool is None:
+            self._pool = await get_pool()
+        return self._pool
 
     @property
     def _use_db(self) -> bool:
-        return self.pool is not None
+        # Check if DATABASE_URL is set — pool will be created lazily
+        return self._pool is not None or bool(os.getenv("DATABASE_URL"))
 
     # ── User CRUD ──────────────────────────────────────────────
 
@@ -69,7 +76,8 @@ class DatabaseService:
     ) -> Dict[str, Any]:
         """Create a new user."""
         if self._use_db:
-            row = await self.pool.fetchrow(
+            pool = await self._get_pool()
+            row = await pool.fetchrow(
                 """
                 INSERT INTO users (id, email, password_hash)
                 VALUES ($1, $2, $3)
@@ -96,7 +104,8 @@ class DatabaseService:
     async def get_user_by_id(self, user_id: str) -> Optional[Dict[str, Any]]:
         """Get a user by ID."""
         if self._use_db:
-            row = await self.pool.fetchrow(
+            pool = await self._get_pool()
+            row = await pool.fetchrow(
                 "SELECT id, email, password_hash, created_at, updated_at FROM users WHERE id = $1",
                 user_id,
             )
@@ -107,7 +116,8 @@ class DatabaseService:
     async def get_user_by_email(self, email: str) -> Optional[Dict[str, Any]]:
         """Get a user by email."""
         if self._use_db:
-            row = await self.pool.fetchrow(
+            pool = await self._get_pool()
+            row = await pool.fetchrow(
                 "SELECT id, email, password_hash, created_at, updated_at FROM users WHERE email = $1",
                 email,
             )
@@ -134,7 +144,8 @@ class DatabaseService:
     ) -> Dict[str, Any]:
         """Create a user profile."""
         if self._use_db:
-            row = await self.pool.fetchrow(
+            pool = await self._get_pool()
+            row = await pool.fetchrow(
                 """
                 INSERT INTO user_profiles
                     (id, user_id, python_level, ros_level, ml_level,
@@ -175,7 +186,8 @@ class DatabaseService:
     async def get_user_profile(self, user_id: str) -> Optional[Dict[str, Any]]:
         """Get a user's profile."""
         if self._use_db:
-            row = await self.pool.fetchrow(
+            pool = await self._get_pool()
+            row = await pool.fetchrow(
                 "SELECT * FROM user_profiles WHERE user_id = $1",
                 user_id,
             )
@@ -209,8 +221,9 @@ class DatabaseService:
                     set_parts.append(f"{key} = ${i}")
                 values.append(val)
 
+            pool = await self._get_pool()
             query = f"UPDATE user_profiles SET {', '.join(set_parts)} WHERE user_id = $1 RETURNING *"
-            row = await self.pool.fetchrow(query, user_id, *values)
+            row = await pool.fetchrow(query, user_id, *values)
             return dict(row) if row else None
 
         # In-memory fallback
@@ -235,7 +248,8 @@ class DatabaseService:
         if not self._use_db:
             return None
 
-        row = await self.pool.fetchrow(
+        pool = await self._get_pool()
+        row = await pool.fetchrow(
             """
             INSERT INTO chat_messages (id, user_id, session_id, role, content, referenced_chapters)
             VALUES ($1, $2, $3, $4, $5, $6)
