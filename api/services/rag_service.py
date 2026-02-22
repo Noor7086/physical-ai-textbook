@@ -1,10 +1,21 @@
-"""RAG service for chatbot with Qdrant vector search."""
+"""RAG service for chatbot with Qdrant vector search via REST API."""
 import os
+import uuid
 from typing import List, Dict, Any, AsyncIterator
-from qdrant_client import AsyncQdrantClient
-from qdrant_client.models import Distance, VectorParams, PointStruct
+
+import httpx
 
 from .openai_client import OpenAIClient
+
+QDRANT_URL = os.getenv("QDRANT_URL", "")
+QDRANT_API_KEY = os.getenv("QDRANT_API_KEY", "")
+
+
+def _qdrant_headers():
+    return {
+        "api-key": QDRANT_API_KEY,
+        "Content-Type": "application/json",
+    }
 
 
 class RAGService:
@@ -13,85 +24,44 @@ class RAGService:
     def __init__(self):
         self.openai = OpenAIClient()
         self.collection_name = os.getenv("QDRANT_COLLECTION", "textbook_chunks")
-        self._client = None
-
-    async def _get_client(self) -> AsyncQdrantClient:
-        """Get or create Qdrant client."""
-        if self._client is None:
-            qdrant_url = os.getenv("QDRANT_URL")
-            qdrant_api_key = os.getenv("QDRANT_API_KEY")
-
-            if qdrant_url and qdrant_api_key:
-                try:
-                    self._client = AsyncQdrantClient(
-                        url=qdrant_url,
-                        api_key=qdrant_api_key,
-                        timeout=10,
-                    )
-                except Exception:
-                    # Fallback to in-memory if cloud connection fails
-                    self._client = AsyncQdrantClient(":memory:")
-                    await self._setup_collection()
-            else:
-                # Use in-memory client for development
-                self._client = AsyncQdrantClient(":memory:")
-                await self._setup_collection()
-        return self._client
-
-    async def _setup_collection(self):
-        """Set up Qdrant collection if it doesn't exist."""
-        client = await self._get_client()
-        collections = await client.get_collections()
-        collection_names = [c.name for c in collections.collections]
-
-        if self.collection_name not in collection_names:
-            await client.create_collection(
-                collection_name=self.collection_name,
-                vectors_config=VectorParams(
-                    size=1536,  # OpenAI text-embedding-3-small dimension
-                    distance=Distance.COSINE,
-                ),
-            )
 
     async def search_similar(
         self,
         query: str,
         limit: int = 5,
     ) -> List[Dict[str, Any]]:
-        """Search for similar content chunks."""
+        """Search for similar content chunks via Qdrant REST API."""
+        if not QDRANT_URL or not QDRANT_API_KEY:
+            return []
+
         try:
-            client = await self._get_client()
-
-            # Check if collection exists and has points
-            try:
-                collection_info = await client.get_collection(self.collection_name)
-                if collection_info.points_count == 0:
-                    return []
-            except Exception:
-                return []
-
-            # Create query embedding
             query_embedding = await self.openai.create_embedding(query)
 
-            # Search Qdrant
-            results = await client.search(
-                collection_name=self.collection_name,
-                query_vector=query_embedding,
-                limit=limit,
-            )
+            async with httpx.AsyncClient(timeout=15) as client:
+                resp = await client.post(
+                    f"{QDRANT_URL}/collections/{self.collection_name}/points/search",
+                    headers=_qdrant_headers(),
+                    json={
+                        "vector": query_embedding,
+                        "limit": limit,
+                        "with_payload": True,
+                    },
+                )
+                if resp.status_code != 200:
+                    return []
+                results = resp.json().get("result", [])
 
             return [
                 {
-                    "content": hit.payload.get("content", ""),
-                    "chapter_slug": hit.payload.get("chapter_slug", ""),
-                    "chapter_title": hit.payload.get("chapter_title", ""),
-                    "module_slug": hit.payload.get("module_slug", ""),
-                    "relevance_score": hit.score,
+                    "content": hit.get("payload", {}).get("content", ""),
+                    "chapter_slug": hit.get("payload", {}).get("chapter_slug", ""),
+                    "chapter_title": hit.get("payload", {}).get("chapter_title", ""),
+                    "module_slug": hit.get("payload", {}).get("module_slug", ""),
+                    "relevance_score": hit.get("score", 0),
                 }
                 for hit in results
             ]
         except Exception:
-            # If vector search fails, return empty results
             return []
 
     async def chat(
@@ -101,16 +71,13 @@ class RAGService:
         chapter_context: str = None,
     ) -> Dict[str, Any]:
         """Generate a chat response using RAG."""
-        # Search for relevant content
         relevant_chunks = await self.search_similar(message, limit=5)
 
-        # Build context from chunks
         context = "\n\n".join([
             f"From {chunk['chapter_title']}:\n{chunk['content']}"
             for chunk in relevant_chunks
         ])
 
-        # Build system prompt
         system_prompt = """You are a helpful teaching assistant for the Physical AI & Humanoid Robotics textbook.
 Your role is to help students understand concepts about ROS 2, Gazebo simulation, NVIDIA Isaac, and humanoid robotics.
 
@@ -127,10 +94,8 @@ Context from the textbook:
             {"role": "user", "content": message},
         ]
 
-        # Generate response
         response = await self.openai.chat_completion(messages)
 
-        # Build references
         references = [
             {
                 "chapter_slug": chunk["chapter_slug"],
@@ -138,7 +103,7 @@ Context from the textbook:
                 "module_slug": chunk["module_slug"],
                 "relevance_score": chunk["relevance_score"],
             }
-            for chunk in relevant_chunks[:3]  # Top 3 references
+            for chunk in relevant_chunks[:3]
         ]
 
         return {
@@ -154,10 +119,8 @@ Context from the textbook:
         chapter_context: str = None,
     ) -> AsyncIterator[Dict[str, Any]]:
         """Generate a streaming chat response using RAG."""
-        # Search for relevant content
         relevant_chunks = await self.search_similar(message, limit=5)
 
-        # Build context
         context = "\n\n".join([
             f"From {chunk['chapter_title']}:\n{chunk['content']}"
             for chunk in relevant_chunks
@@ -175,11 +138,9 @@ Context:
             {"role": "user", "content": message},
         ]
 
-        # Stream response
         async for chunk in self.openai.chat_completion_stream(messages):
             yield {"type": "content", "content": chunk}
 
-        # Send references at the end
         references = [
             {
                 "chapter_slug": chunk["chapter_slug"],
@@ -228,20 +189,18 @@ Please answer their question clearly and helpfully, providing additional context
         self,
         chunks: List[Dict[str, Any]],
     ) -> int:
-        """Index content chunks into Qdrant."""
-        client = await self._get_client()
-        await self._setup_collection()
+        """Index content chunks into Qdrant via REST API."""
+        if not QDRANT_URL or not QDRANT_API_KEY:
+            return 0
 
-        # Create embeddings for all chunks
         texts = [chunk["content"] for chunk in chunks]
         embeddings = await self.openai.create_embeddings(texts)
 
-        # Create points
         points = [
-            PointStruct(
-                id=i,
-                vector=embedding,
-                payload={
+            {
+                "id": str(uuid.uuid4()),
+                "vector": embedding,
+                "payload": {
                     "content": chunk["content"],
                     "chapter_slug": chunk["chapter_slug"],
                     "chapter_title": chunk["chapter_title"],
@@ -249,14 +208,16 @@ Please answer their question clearly and helpfully, providing additional context
                     "heading": chunk.get("heading", ""),
                     "position": chunk.get("position", i),
                 },
-            )
+            }
             for i, (chunk, embedding) in enumerate(zip(chunks, embeddings))
         ]
 
-        # Upsert points
-        await client.upsert(
-            collection_name=self.collection_name,
-            points=points,
-        )
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.put(
+                f"{QDRANT_URL}/collections/{self.collection_name}/points",
+                headers=_qdrant_headers(),
+                json={"points": points},
+            )
+            resp.raise_for_status()
 
         return len(points)
