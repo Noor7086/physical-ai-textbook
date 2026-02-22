@@ -1,0 +1,8 @@
+history/
+specs/
+tests/
+.specify/
+.claude/
+*.md
+!README.md
+docusaurus/static/podcasts/*.mp3
