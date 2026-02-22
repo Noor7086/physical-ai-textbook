@@ -41,6 +41,17 @@ async def close_pool():
         logger.info("Database pool closed")
 
 
+def _serialize_row(row) -> Dict[str, Any]:
+    """Convert asyncpg Record to dict with UUID/datetime as strings."""
+    d = dict(row)
+    for k, v in d.items():
+        if hasattr(v, 'hex') and hasattr(v, 'int'):  # UUID
+            d[k] = str(v)
+        elif isinstance(v, datetime):
+            d[k] = v
+    return d
+
+
 class DatabaseService:
     """Database service for user and profile management.
 
@@ -87,7 +98,7 @@ class DatabaseService:
                 email,
                 password_hash,
             )
-            return dict(row)
+            return _serialize_row(row)
 
         # In-memory fallback
         now = datetime.utcnow()
@@ -109,7 +120,7 @@ class DatabaseService:
                 "SELECT id, email, password_hash, created_at, updated_at FROM users WHERE id = $1",
                 user_id,
             )
-            return dict(row) if row else None
+            return _serialize_row(row) if row else None
 
         return self._users.get(user_id)
 
@@ -121,7 +132,7 @@ class DatabaseService:
                 "SELECT id, email, password_hash, created_at, updated_at FROM users WHERE email = $1",
                 email,
             )
-            return dict(row) if row else None
+            return _serialize_row(row) if row else None
 
         for user in self._users.values():
             if user["email"] == email:
@@ -164,7 +175,7 @@ class DatabaseService:
                 robot_experience,
                 learning_goals,
             )
-            return dict(row)
+            return _serialize_row(row)
 
         # In-memory fallback
         now = datetime.utcnow()
@@ -191,7 +202,7 @@ class DatabaseService:
                 "SELECT * FROM user_profiles WHERE user_id = $1",
                 user_id,
             )
-            return dict(row) if row else None
+            return _serialize_row(row) if row else None
 
         return self._profiles.get(user_id)
 
@@ -224,7 +235,7 @@ class DatabaseService:
             pool = await self._get_pool()
             query = f"UPDATE user_profiles SET {', '.join(set_parts)} WHERE user_id = $1 RETURNING *"
             row = await pool.fetchrow(query, user_id, *values)
-            return dict(row) if row else None
+            return _serialize_row(row) if row else None
 
         # In-memory fallback
         profile = self._profiles.get(user_id)
@@ -262,7 +273,7 @@ class DatabaseService:
             content,
             referenced_chapters or [],
         )
-        return dict(row) if row else None
+        return _serialize_row(row) if row else None
 
 
 @asynccontextmanager
