@@ -1,15 +1,21 @@
 {
-  "buildCommand": "cd docusaurus && npm install && npm run build",
-  "outputDirectory": "docusaurus/build",
-  "functions": {
-    "api/index.py": {
-      "runtime": "@vercel/python@4.5.0",
-      "maxDuration": 60,
-      "includeFiles": "api/**"
+  "version": 2,
+  "builds": [
+    {
+      "src": "docusaurus/package.json",
+      "use": "@vercel/static-build",
+      "config": {
+        "distDir": "build"
+      }
+    },
+    {
+      "src": "api/index.py",
+      "use": "@vercel/python"
     }
-  },
-  "rewrites": [
-    { "source": "/api/(.*)", "destination": "/api/index.py" },
-    { "source": "/health", "destination": "/api/index.py" }
+  ],
+  "routes": [
+    { "src": "/api/(.*)", "dest": "/api/index.py" },
+    { "src": "/health", "dest": "/api/index.py" },
+    { "src": "/(.*)", "dest": "/docusaurus/$1" }
   ]
 }
