@@ -38,3 +38,4 @@ docusaurus/build
 
 # API
 api/.env
+public/

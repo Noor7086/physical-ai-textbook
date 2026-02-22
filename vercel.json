@@ -1,5 +1,5 @@
 {
-  "buildCommand": "cd docusaurus && npm install && npm run build",
-  "outputDirectory": "docusaurus/build",
+  "buildCommand": "cd docusaurus && npm install && npm run build && cp -r build ../public",
+  "outputDirectory": "public",
   "rewrites": [{ "source": "/api/(.*)", "destination": "/api" }]
 }
