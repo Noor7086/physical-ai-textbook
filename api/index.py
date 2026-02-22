@@ -1,5 +1,13 @@
 """
 Vercel Serverless entry point for FastAPI.
-Vercel expects a module-level `app` variable (ASGI/WSGI).
+Ensures the api/ directory is on the Python path so all imports resolve.
 """
-from main import app  # noqa: F401 — Vercel picks this up automatically
+import os
+import sys
+
+# Add the api/ directory to Python path so main.py can import routers, services, db
+api_dir = os.path.dirname(os.path.abspath(__file__))
+if api_dir not in sys.path:
+    sys.path.insert(0, api_dir)
+
+from main import app  # noqa: F401
