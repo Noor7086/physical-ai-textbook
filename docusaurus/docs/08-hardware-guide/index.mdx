@@ -1,0 +1,239 @@
+---
+sidebar_position: 1
+title: "Hardware Guide"
+description: "Comprehensive hardware requirements and recommendations for physical AI and humanoid robotics development"
+---
+
+# Hardware Guide
+
+Building physical AI systems requires the right hardware foundation. Whether you are running neural network inference, simulating humanoid locomotion in Gazebo, or deploying models to edge devices, your hardware choices directly impact development speed, iteration cycles, and the complexity of problems you can tackle.
+
+This guide walks you through every hardware decision you need to make -- from your development workstation to embedded compute platforms and robot hardware itself.
+
+## Learning Objectives
+
+By the end of this module, you will be able to:
+
+1. **Select** appropriate hardware for your budget and learning goals
+2. **Configure** a development workstation with GPU acceleration for robotics AI
+3. **Set up** an NVIDIA Jetson device for edge deployment of perception and control models
+4. **Evaluate** robot platforms ranging from simulation-only to full humanoid systems
+5. **Understand** the compute pipeline from training workstation to on-robot inference
+6. **Budget** realistically for a physical AI development lab at each tier
+
+## Why Hardware Matters in Physical AI
+
+Traditional software development can happen on nearly any laptop. Physical AI is different. Consider the computational demands across the development pipeline:
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                   Physical AI Compute Pipeline                  │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  ┌──────────┐    ┌──────────────┐    ┌───────────────────────┐  │
+│  │ TRAINING │    │  SIMULATION  │    │  REAL-TIME INFERENCE   │  │
+│  │          │    │              │    │                        │  │
+│  │ Cloud or │───▶│ Workstation  │───▶│  Edge Device (Jetson)  │  │
+│  │ HPC GPU  │    │ GPU + CPU    │    │  or On-Robot Compute   │  │
+│  │          │    │              │    │                        │  │
+│  │ Hours to │    │ Real-time    │    │  <10ms latency         │  │
+│  │ Days     │    │ physics      │    │  required              │  │
+│  └──────────┘    └──────────────┘    └───────────────────────┘  │
+│                                                                 │
+│  High VRAM           Balanced             Low Power, Low        │
+│  High Throughput     GPU + CPU            Latency               │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+Each stage in this pipeline has distinct hardware requirements. A model trained in the cloud on A100 GPUs must ultimately run on a Jetson Orin embedded in a robot's torso -- and do so within a strict latency budget.
+
+## Recommended Hardware Tiers
+
+We define three tiers to help you match your investment to your learning stage.
+
+### Tier 1: Beginner (Simulation Only)
+
+Best for students and newcomers exploring physical AI concepts without physical robots.
+
+| Component | Minimum Spec | Estimated Cost |
+|-----------|-------------|----------------|
+| **GPU** | NVIDIA RTX 3060 (12 GB VRAM) | $300 |
+| **CPU** | Intel i5-12400 / AMD Ryzen 5 5600X | $150-200 |
+| **RAM** | 16 GB DDR4 | $40-60 |
+| **Storage** | 512 GB NVMe SSD | $40-50 |
+| **OS** | Ubuntu 22.04 LTS | Free |
+| **Total** | | **~$700-900** (desktop build) |
+
+**What you can do at this tier:**
+- Run Gazebo simulations with single robots
+- Train small neural networks (policy networks, simple perception)
+- Complete all simulation-based exercises in this textbook
+- Run ROS 2 with standard robotics packages
+
+### Tier 2: Intermediate (Simulation + Edge Deployment)
+
+For learners ready to deploy models onto real hardware and work with physical sensors.
+
+| Component | Recommended Spec | Estimated Cost |
+|-----------|-----------------|----------------|
+| **GPU** | NVIDIA RTX 4070 Ti (12 GB VRAM) | $700 |
+| **CPU** | Intel i7-13700K / AMD Ryzen 7 7700X | $300-350 |
+| **RAM** | 32 GB DDR5 | $80-120 |
+| **Storage** | 1 TB NVMe SSD | $70-90 |
+| **Edge Device** | NVIDIA Jetson Orin Nano (8 GB) | $500 |
+| **Robot Kit** | TurtleBot 4 Lite or equivalent | $1,100 |
+| **OS** | Ubuntu 22.04 LTS | Free |
+| **Total** | | **~$2,800-3,200** |
+
+**What you can do at this tier:**
+- Run Isaac Sim with moderately complex environments
+- Train reinforcement learning policies for locomotion
+- Deploy inference models to Jetson for real-time control
+- Operate a mobile robot with onboard perception
+
+### Tier 3: Advanced (Full Development Lab)
+
+For researchers, professional developers, and teams building humanoid systems.
+
+| Component | Recommended Spec | Estimated Cost |
+|-----------|-----------------|----------------|
+| **GPU** | NVIDIA RTX 4090 (24 GB VRAM) | $1,600 |
+| **CPU** | Intel i9-14900K / AMD Ryzen 9 7950X | $500-600 |
+| **RAM** | 64 GB DDR5 | $160-240 |
+| **Storage** | 2 TB NVMe SSD + 4 TB HDD | $200-250 |
+| **Edge Device** | NVIDIA Jetson Orin NX (16 GB) | $900 |
+| **Robot Platform** | Unitree G1 or custom build | $16,000+ |
+| **Sensors** | Intel RealSense D455 + IMU | $350 |
+| **OS** | Ubuntu 22.04 LTS | Free |
+| **Total** | | **~$20,000+** |
+
+**What you can do at this tier:**
+- Run multi-robot Isaac Sim environments
+- Train large-scale policies with domain randomization
+- Full sim-to-real transfer pipelines
+- Operate humanoid platforms with real-time whole-body control
+
+## Budget Considerations
+
+### Where to Invest First
+
+If you are building incrementally, prioritize your spending in this order:
+
+1. **GPU (highest priority)** -- The single most impactful component. VRAM determines the size of models you can train and the complexity of simulations you can run. A 12 GB card is the practical minimum for modern robotics AI workloads.
+
+2. **RAM** -- Simulation environments like Gazebo and Isaac Sim are memory-hungry. 16 GB is the floor; 32 GB gives comfortable headroom.
+
+3. **CPU** -- Multi-core performance matters for ROS 2 (which runs many concurrent nodes) and for physics simulation stepping. Aim for 8+ cores.
+
+4. **Storage** -- Isaac Sim alone requires ~30 GB installed. Docker images, datasets, and ROS packages add up fast. NVMe speed matters for loading large simulation assets.
+
+5. **Edge device** -- A Jetson is not required until you are ready to deploy models off your workstation. It can be added later.
+
+### Cost-Saving Strategies
+
+```python
+# Quick cost estimator for your physical AI lab
+def estimate_lab_cost(tier: str) -> dict:
+    """Estimate costs for a physical AI development setup."""
+    tiers = {
+        "beginner": {
+            "workstation": 800,
+            "edge_device": 0,
+            "robot": 0,
+            "peripherals": 50,
+            "cloud_monthly": 0,
+        },
+        "intermediate": {
+            "workstation": 1500,
+            "edge_device": 500,
+            "robot": 1100,
+            "peripherals": 200,
+            "cloud_monthly": 50,
+        },
+        "advanced": {
+            "workstation": 3000,
+            "edge_device": 900,
+            "robot": 16000,
+            "peripherals": 500,
+            "cloud_monthly": 200,
+        },
+    }
+
+    config = tiers.get(tier, tiers["beginner"])
+    config["total_upfront"] = sum(
+        v for k, v in config.items() if k != "cloud_monthly"
+    )
+    config["first_year_total"] = (
+        config["total_upfront"] + config["cloud_monthly"] * 12
+    )
+    return config
+
+# Example usage
+for tier in ["beginner", "intermediate", "advanced"]:
+    costs = estimate_lab_cost(tier)
+    print(f"{tier.upper()}: ${costs['total_upfront']:,} upfront, "
+          f"${costs['first_year_total']:,} first year")
+```
+
+**Output:**
+```
+BEGINNER: $850 upfront, $850 first year
+INTERMEDIATE: $3,300 upfront, $3,900 first year
+ADVANCED: $20,400 upfront, $22,800 first year
+```
+
+**Tips for reducing costs:**
+- Use Google Colab or Lambda Labs for GPU training bursts instead of buying a top-tier GPU
+- Buy previous-generation GPUs (RTX 3090 offers 24 GB VRAM at lower cost than a 4090)
+- Start with simulation-only (Tier 1) and add physical hardware as your skills grow
+- University labs and makerspaces often have shared Jetson devices and robots
+
+## What This Guide Covers
+
+| Chapter | Topic | Key Outcomes |
+|---------|-------|-------------|
+| [Workstation Setup](./workstation-setup) | Development machine configuration | Fully configured Ubuntu workstation with GPU drivers, CUDA, Docker, and ROS 2 |
+| [Jetson Kit](./jetson-kit) | NVIDIA Jetson edge platform | Flashed and configured Jetson running ROS 2 with camera and IMU |
+| [Robot Options](./robot-options) | Choosing a robot platform | Informed decision on simulation-only, wheeled robot, manipulator, or humanoid |
+
+## Hardware Compatibility Matrix
+
+Before purchasing, verify that your components work together:
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│              Compatibility Check                             │
+├──────────────────────────────────────────────────────────────┤
+│                                                              │
+│  Ubuntu 22.04 LTS ──── ROS 2 Humble (Tier 1 support)        │
+│       │                                                      │
+│       ├── NVIDIA Driver 535+ ──── CUDA 12.2+                 │
+│       │        │                                             │
+│       │        ├── cuDNN 8.9+                                │
+│       │        ├── TensorRT 8.6+                             │
+│       │        └── Isaac Sim 4.0+ (requires RTX GPU)         │
+│       │                                                      │
+│       ├── Docker 24+ ──── NVIDIA Container Toolkit           │
+│       │                                                      │
+│       └── Gazebo Harmonic (standalone, no GPU required)      │
+│                                                              │
+│  JetPack 6.0 ──── Jetson Orin Nano / NX                     │
+│       │                                                      │
+│       ├── CUDA 12.2 (pre-installed)                          │
+│       ├── TensorRT 8.6 (pre-installed)                       │
+│       └── ROS 2 Humble (via apt)                             │
+│                                                              │
+└──────────────────────────────────────────────────────────────┘
+```
+
+## Prerequisites
+
+Before proceeding with hardware setup, ensure you have:
+
+- Completed Modules 1-2 (Introduction to Physical AI and ROS 2 Fundamentals)
+- Basic familiarity with Linux command line
+- A clear understanding of which tier matches your goals and budget
+
+## Next Steps
+
+Continue to [Workstation Setup](./workstation-setup) to configure your development machine with all the software you need for physical AI development.

@@ -1,0 +1,467 @@
+---
+sidebar_position: 2
+title: "Project Requirements"
+description: "Detailed requirements for the capstone project: building an autonomous humanoid assistant"
+---
+
+# Project Requirements
+
+This document defines the complete requirements for the capstone project. Your goal is to build an **Autonomous Humanoid Assistant** capable of operating in a simulated indoor environment, receiving natural-language commands, and completing household tasks.
+
+## Scenario Description
+
+Your humanoid robot is deployed in a **simulated apartment** containing a living room, kitchen, and bedroom. A human operator issues voice or text commands such as:
+
+- "Bring me the red cup from the kitchen counter."
+- "Go to the bedroom and check if the window is open."
+- "Pick up the book on the table and place it on the shelf."
+
+The robot must **understand** the command, **plan** a sequence of actions, **navigate** to the correct location, **manipulate** the target object, and **report** the outcome back to the user.
+
+## Functional Requirements
+
+### FR-1: Natural Language Command Interface
+
+The robot must accept commands through a text or speech interface and parse them into structured task representations.
+
+```python
+# Example: Command parsing node
+from dataclasses import dataclass
+from typing import Optional
+
+@dataclass
+class TaskCommand:
+    """Structured representation of a user command."""
+    action: str              # e.g., "fetch", "inspect", "place"
+    target_object: str       # e.g., "red cup", "book"
+    source_location: str     # e.g., "kitchen counter"
+    destination: Optional[str] = None  # e.g., "shelf"
+    
+    def validate(self) -> bool:
+        """Ensure command has minimum required fields."""
+        return bool(self.action and self.target_object and self.source_location)
+
+
+# Example parsed commands
+commands = [
+    TaskCommand(action="fetch", target_object="red cup", 
+                source_location="kitchen counter", destination="user"),
+    TaskCommand(action="inspect", target_object="window", 
+                source_location="bedroom"),
+    TaskCommand(action="place", target_object="book", 
+                source_location="table", destination="shelf"),
+]
+```
+
+**Acceptance Criteria:**
+- [ ] Robot accepts free-form text commands via a ROS 2 topic (`/human_command`)
+- [ ] Commands are parsed into structured `TaskCommand` messages
+- [ ] Unknown or ambiguous commands trigger a clarification request
+- [ ] Command history is logged for debugging
+
+### FR-2: Autonomous Navigation
+
+The robot must navigate between rooms and to specific locations within rooms using the ROS 2 Navigation Stack (Nav2).
+
+```python
+# Example: Navigation goal publisher
+import rclpy
+from rclpy.node import Node
+from geometry_msgs.msg import PoseStamped
+from nav2_simple_commander.robot_navigator import BasicNavigator
+
+class HumanoidNavigator(Node):
+    def __init__(self):
+        super().__init__('humanoid_navigator')
+        self.navigator = BasicNavigator()
+        
+        # Define known locations in the apartment
+        self.locations = {
+            'kitchen_counter': self._make_pose(3.0, 2.5, 0.0),
+            'living_room_table': self._make_pose(0.0, 0.0, 0.0),
+            'bedroom_window': self._make_pose(-2.0, 4.0, 1.57),
+            'bookshelf': self._make_pose(1.0, -1.5, 3.14),
+        }
+    
+    def navigate_to(self, location_name: str) -> bool:
+        """Navigate to a named location. Returns True on success."""
+        if location_name not in self.locations:
+            self.get_logger().error(f'Unknown location: {location_name}')
+            return False
+        
+        goal_pose = self.locations[location_name]
+        self.navigator.goToPose(goal_pose)
+        
+        while not self.navigator.isTaskComplete():
+            feedback = self.navigator.getFeedback()
+            if feedback:
+                remaining = feedback.distance_remaining
+                self.get_logger().info(f'Distance remaining: {remaining:.2f}m')
+        
+        result = self.navigator.getResult()
+        return result == self.navigator.TaskResult.SUCCEEDED
+    
+    def _make_pose(self, x: float, y: float, yaw: float) -> PoseStamped:
+        pose = PoseStamped()
+        pose.header.frame_id = 'map'
+        pose.pose.position.x = x
+        pose.pose.position.y = y
+        pose.pose.orientation.z = yaw  # simplified; use quaternion in practice
+        return pose
+```
+
+**Acceptance Criteria:**
+- [ ] Robot can navigate to any named room in the apartment
+- [ ] Obstacle avoidance works for static and dynamic obstacles
+- [ ] Navigation succeeds in under 60 seconds for any room-to-room traversal
+- [ ] Robot recovers from navigation failures (replanning)
+
+### FR-3: Object Detection and Recognition
+
+The robot must detect and identify objects in the environment using a camera-based perception pipeline.
+
+```python
+# Example: Object detection node using Isaac ROS
+import rclpy
+from rclpy.node import Node
+from sensor_msgs.msg import Image
+from vision_msgs.msg import Detection2DArray
+
+class ObjectDetector(Node):
+    def __init__(self):
+        super().__init__('object_detector')
+        
+        self.image_sub = self.create_subscription(
+            Image, '/camera/color/image_raw', self.image_callback, 10)
+        
+        self.detection_pub = self.create_publisher(
+            Detection2DArray, '/detections', 10)
+        
+        # Known object classes for the apartment scenario
+        self.target_classes = [
+            'cup', 'book', 'bottle', 'plate', 'remote',
+            'phone', 'window', 'door', 'chair'
+        ]
+        
+        self.get_logger().info(
+            f'Object detector ready. Tracking {len(self.target_classes)} classes.')
+    
+    def image_callback(self, msg: Image):
+        """Process incoming camera image for object detection."""
+        # In practice, this would use Isaac ROS DNN Inference
+        # or a custom model running on the GPU
+        detections = self.run_inference(msg)
+        
+        # Filter for target objects
+        filtered = self.filter_detections(detections, self.target_classes)
+        
+        self.detection_pub.publish(filtered)
+    
+    def run_inference(self, image: Image) -> Detection2DArray:
+        """Run object detection model on the image."""
+        # Placeholder: integrate with Isaac ROS or custom model
+        pass
+    
+    def filter_detections(self, detections, target_classes):
+        """Keep only detections matching our target objects."""
+        pass
+```
+
+**Acceptance Criteria:**
+- [ ] Robot detects at least 5 object classes with > 80% accuracy
+- [ ] Object positions are estimated in 3D (using depth camera)
+- [ ] Detections are published at a minimum of 5 Hz
+- [ ] False positive rate is below 10%
+
+### FR-4: Object Manipulation
+
+The robot must pick up and place objects using its manipulator arm(s).
+
+**Acceptance Criteria:**
+- [ ] Robot can grasp objects of varying sizes (5-15 cm diameter)
+- [ ] Pick-and-place success rate exceeds 70% in simulation
+- [ ] Grasp planning considers object shape and orientation
+- [ ] Robot detects grasp failures and retries (up to 3 attempts)
+
+### FR-5: Task Planning and Execution
+
+The robot must decompose high-level commands into sequences of primitive actions and execute them reliably.
+
+```python
+# Example: Behaviour tree structure for a fetch task
+"""
+Fetch Task Behaviour Tree:
+
+[Sequence: FetchObject]
+├── [Action: ParseCommand]
+├── [Action: NavigateToSource]
+├── [Action: DetectObject]
+├── [Fallback: GraspWithRetry]
+│   ├── [Action: PlanGrasp]
+│   ├── [Action: ExecuteGrasp]
+│   └── [Action: RetryGrasp]  (max 3 attempts)
+├── [Action: NavigateToDestination]
+├── [Action: PlaceObject]
+└── [Action: ReportSuccess]
+"""
+
+from dataclasses import dataclass
+from enum import Enum
+from typing import List
+
+class TaskStatus(Enum):
+    PENDING = "pending"
+    RUNNING = "running"
+    SUCCESS = "success"
+    FAILURE = "failure"
+
+@dataclass
+class PrimitiveAction:
+    name: str
+    parameters: dict
+    status: TaskStatus = TaskStatus.PENDING
+
+class TaskPlanner:
+    """Decomposes high-level commands into primitive action sequences."""
+    
+    def plan(self, command: 'TaskCommand') -> List[PrimitiveAction]:
+        """Generate a sequence of primitive actions for a command."""
+        actions = []
+        
+        if command.action == "fetch":
+            actions = [
+                PrimitiveAction("navigate", {"target": command.source_location}),
+                PrimitiveAction("detect", {"object": command.target_object}),
+                PrimitiveAction("grasp", {"object": command.target_object}),
+                PrimitiveAction("navigate", {"target": command.destination}),
+                PrimitiveAction("place", {"object": command.target_object}),
+            ]
+        elif command.action == "inspect":
+            actions = [
+                PrimitiveAction("navigate", {"target": command.source_location}),
+                PrimitiveAction("detect", {"object": command.target_object}),
+                PrimitiveAction("report", {"object": command.target_object}),
+            ]
+        
+        return actions
+    
+    def execute(self, actions: List[PrimitiveAction]):
+        """Execute actions sequentially, handling failures."""
+        for action in actions:
+            action.status = TaskStatus.RUNNING
+            success = self._execute_single(action)
+            action.status = TaskStatus.SUCCESS if success else TaskStatus.FAILURE
+            
+            if not success:
+                return False
+        return True
+```
+
+**Acceptance Criteria:**
+- [ ] Robot decomposes at least 3 command types (fetch, inspect, place)
+- [ ] Execution handles partial failures gracefully (retry or abort)
+- [ ] Task progress is reported via a ROS 2 topic (`/task_status`)
+- [ ] Average task completion time is under 120 seconds
+
+### FR-6: Status Reporting
+
+The robot must report task status and results back to the user through the conversational interface.
+
+**Acceptance Criteria:**
+- [ ] Robot confirms receipt of commands
+- [ ] Progress updates are provided during long-running tasks
+- [ ] Success or failure is clearly communicated with details
+- [ ] Robot can describe what it sees when asked
+
+## Non-Functional Requirements
+
+### NFR-1: Performance
+
+| Metric | Target |
+|--------|--------|
+| Navigation latency (room to room) | < 60 seconds |
+| Object detection inference | < 200 ms per frame |
+| Grasp planning | < 5 seconds |
+| Command parsing | < 2 seconds |
+| End-to-end task completion | < 120 seconds |
+
+### NFR-2: Reliability
+
+- System must not crash during a 30-minute continuous operation test
+- All ROS 2 nodes must implement graceful error handling
+- Watchdog node monitors system health and restarts failed components
+
+### NFR-3: Code Quality
+
+- All Python code must pass `flake8` linting with zero errors
+- All public functions must have docstrings
+- Type hints are required for function signatures
+- Minimum 60% unit test coverage
+
+### NFR-4: Documentation
+
+- README with setup instructions that a peer can follow
+- Architecture diagram (draw.io or Mermaid format)
+- API documentation for all custom messages and services
+- Troubleshooting guide for common issues
+
+## Evaluation Rubric
+
+### Architecture (20 points)
+
+| Points | Criteria |
+|--------|----------|
+| 18-20 | Excellent separation of concerns; clean ROS 2 patterns; well-defined interfaces |
+| 14-17 | Good architecture with minor coupling issues |
+| 10-13 | Functional but with significant design problems |
+| 0-9 | Monolithic design or missing key components |
+
+### Functionality (30 points)
+
+| Points | Criteria |
+|--------|----------|
+| 27-30 | All FR met; robot completes all 3 scenario tests |
+| 20-26 | Most FR met; robot completes 2 of 3 scenarios |
+| 12-19 | Some FR met; robot completes 1 scenario |
+| 0-11 | Major functionality missing; no scenario completed |
+
+### Code Quality (15 points)
+
+| Points | Criteria |
+|--------|----------|
+| 13-15 | Clean, well-documented code; passes all linting; proper packaging |
+| 10-12 | Generally clean with minor issues |
+| 6-9 | Functional but poorly organized or documented |
+| 0-5 | Significant quality issues |
+
+### Testing (15 points)
+
+| Points | Criteria |
+|--------|----------|
+| 13-15 | Comprehensive unit, integration, and scenario tests; > 60% coverage |
+| 10-12 | Good test coverage with some gaps |
+| 6-9 | Minimal testing; low coverage |
+| 0-5 | Little to no testing |
+
+### Report and Demo (20 points)
+
+| Points | Criteria |
+|--------|----------|
+| 18-20 | Professional report; clear demo; honest analysis of limitations |
+| 14-17 | Good report and demo with minor gaps |
+| 10-13 | Adequate but missing significant analysis |
+| 0-9 | Poor documentation or missing demo |
+
+## Submission Guidelines
+
+### Repository Structure
+
+Your submission repository must follow this structure:
+
+```
+capstone_ws/
+├── src/
+│   ├── humanoid_bringup/          # Launch files and configs
+│   │   ├── launch/
+│   │   │   ├── full_system.launch.py
+│   │   │   └── simulation.launch.py
+│   │   ├── config/
+│   │   │   ├── nav2_params.yaml
+│   │   │   └── detector_params.yaml
+│   │   └── package.xml
+│   ├── humanoid_perception/       # Object detection and recognition
+│   │   ├── humanoid_perception/
+│   │   │   ├── __init__.py
+│   │   │   └── object_detector.py
+│   │   ├── test/
+│   │   │   └── test_object_detector.py
+│   │   └── package.xml
+│   ├── humanoid_navigation/       # Navigation and path planning
+│   │   ├── humanoid_navigation/
+│   │   │   ├── __init__.py
+│   │   │   └── navigator.py
+│   │   ├── test/
+│   │   │   └── test_navigator.py
+│   │   └── package.xml
+│   ├── humanoid_manipulation/     # Grasping and object placement
+│   │   ├── humanoid_manipulation/
+│   │   │   ├── __init__.py
+│   │   │   └── grasp_planner.py
+│   │   ├── test/
+│   │   │   └── test_grasp_planner.py
+│   │   └── package.xml
+│   ├── humanoid_planning/         # Task decomposition and execution
+│   │   ├── humanoid_planning/
+│   │   │   ├── __init__.py
+│   │   │   └── task_planner.py
+│   │   ├── test/
+│   │   │   └── test_task_planner.py
+│   │   └── package.xml
+│   ├── humanoid_dialogue/         # NLP command interface
+│   │   ├── humanoid_dialogue/
+│   │   │   ├── __init__.py
+│   │   │   └── command_parser.py
+│   │   ├── test/
+│   │   │   └── test_command_parser.py
+│   │   └── package.xml
+│   └── humanoid_msgs/             # Custom message and service definitions
+│       ├── msg/
+│       │   ├── TaskCommand.msg
+│       │   └── TaskStatus.msg
+│       ├── srv/
+│       │   └── ParseCommand.srv
+│       └── package.xml
+├── worlds/
+│   └── apartment.sdf              # Gazebo simulation world
+├── docs/
+│   ├── architecture.md
+│   ├── api-reference.md
+│   └── troubleshooting.md
+├── README.md
+└── report.pdf
+```
+
+### Submission Checklist
+
+Before submitting, verify each item:
+
+- [ ] All packages build with `colcon build` without errors
+- [ ] `colcon test` passes with zero failures
+- [ ] `flake8` reports zero errors across all Python files
+- [ ] Full system launches with `ros2 launch humanoid_bringup full_system.launch.py`
+- [ ] Demo video is recorded and linked in README
+- [ ] Report PDF is included in the repository root
+- [ ] All team members have commits in the Git history
+- [ ] README contains clear setup and run instructions
+
+### Submission Deadline
+
+**End of Week 16** -- exact date announced on the course portal.
+
+Late submissions receive a 10% deduction per day, up to 3 days. No submissions accepted after 3 days late.
+
+## Scenario Tests
+
+Your system will be evaluated against these three scenarios:
+
+### Scenario 1: Simple Fetch
+
+> "Bring me the red cup from the kitchen counter."
+
+**Expected Behavior:** Navigate to kitchen, detect the red cup, grasp it, navigate back to the user, place or hand over the cup.
+
+### Scenario 2: Room Inspection
+
+> "Go to the bedroom and tell me if the window is open."
+
+**Expected Behavior:** Navigate to bedroom, detect and inspect the window, report status (open/closed) back to the user.
+
+### Scenario 3: Multi-Step Rearrangement
+
+> "Pick up the book on the living room table and put it on the bookshelf."
+
+**Expected Behavior:** Navigate to living room table, detect the book, grasp it, navigate to the bookshelf, place the book on the shelf, confirm completion.
+
+## Next Steps
+
+Continue to the [Implementation Guide](./implementation-guide) for step-by-step technical guidance on building your capstone system.

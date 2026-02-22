@@ -1,0 +1,340 @@
+---
+sidebar_position: 4
+title: "Sensor Systems"
+description: "Understanding LiDAR, cameras, IMUs, and force/torque sensors in robotics"
+---
+
+# Sensor Systems for Humanoid Robots
+
+Sensors are the eyes, ears, and touch of a robot. This chapter explores the key sensor systems that enable humanoid robots to perceive and interact with their environment.
+
+## Sensor Categories
+
+Sensors in robotics are categorized into two main types:
+
+### Proprioceptive Sensors (Internal State)
+Measure the robot's own state:
+- Joint positions and velocities
+- Body orientation
+- Internal forces
+
+### Exteroceptive Sensors (External World)
+Measure the environment:
+- Visual information
+- Distance to objects
+- Contact with surfaces
+
+## Vision Systems
+
+### RGB Cameras
+
+Standard cameras capture color images for visual perception:
+
+```python
+import cv2
+
+class RGBCamera:
+    def __init__(self, resolution=(640, 480), fps=30):
+        self.resolution = resolution
+        self.fps = fps
+        
+    def capture(self):
+        """Capture an RGB frame"""
+        frame = self.camera.read()
+        return frame  # Shape: (height, width, 3)
+    
+    def detect_objects(self, frame):
+        """Use computer vision to detect objects"""
+        # Object detection pipeline
+        detections = self.model.predict(frame)
+        return detections
+```
+
+### Depth Cameras
+
+Depth cameras provide distance information for each pixel:
+
+| Technology | Range | Accuracy | Use Case |
+|------------|-------|----------|----------|
+| **Stereo** | 0.5-10m | ±1% | Outdoor, variable lighting |
+| **Structured Light** | 0.3-3m | ±1mm | Indoor, high precision |
+| **ToF (Time of Flight)** | 0.1-10m | ±1cm | All-around, fast |
+
+**Intel RealSense D435i** is commonly used in robotics:
+
+```python
+import pyrealsense2 as rs
+
+class DepthCamera:
+    def __init__(self):
+        self.pipeline = rs.pipeline()
+        self.config = rs.config()
+        
+        # Enable streams
+        self.config.enable_stream(rs.stream.depth, 640, 480, rs.format.z16, 30)
+        self.config.enable_stream(rs.stream.color, 640, 480, rs.format.bgr8, 30)
+        
+    def get_rgbd_frame(self):
+        """Get aligned RGB and depth frames"""
+        frames = self.pipeline.wait_for_frames()
+        depth_frame = frames.get_depth_frame()
+        color_frame = frames.get_color_frame()
+        
+        return {
+            'rgb': np.asanyarray(color_frame.get_data()),
+            'depth': np.asanyarray(depth_frame.get_data())
+        }
+```
+
+## LiDAR (Light Detection and Ranging)
+
+LiDAR uses laser pulses to create 3D maps of the environment:
+
+### How LiDAR Works
+
+```
+    Laser Pulse ─────▶ ┌─────┐
+         │            │     │
+         │            │     │ ← Object
+         │◀─ Return ──│     │
+         │            └─────┘
+         │
+    ┌────┴────┐
+    │  LiDAR  │
+    │ Sensor  │
+    └─────────┘
+    
+Distance = (Time × Speed of Light) / 2
+```
+
+### LiDAR Specifications
+
+| Type | Points/sec | Range | FOV | Use Case |
+|------|------------|-------|-----|----------|
+| **2D LiDAR** | 8,000 | 30m | 270° | Navigation |
+| **3D LiDAR** | 300,000+ | 100m | 360° × 30° | SLAM, Mapping |
+| **Solid-State** | 200,000 | 200m | 120° × 25° | Automotive |
+
+### Processing LiDAR Data
+
+```python
+import numpy as np
+
+class LiDARProcessor:
+    def __init__(self):
+        self.point_cloud = None
+        
+    def process_scan(self, ranges, angles):
+        """Convert polar to Cartesian coordinates"""
+        x = ranges * np.cos(angles)
+        y = ranges * np.sin(angles)
+        z = np.zeros_like(x)  # 2D LiDAR
+        
+        self.point_cloud = np.column_stack([x, y, z])
+        return self.point_cloud
+    
+    def detect_obstacles(self, min_distance=0.5):
+        """Find points closer than min_distance"""
+        distances = np.linalg.norm(self.point_cloud[:, :2], axis=1)
+        obstacles = self.point_cloud[distances < min_distance]
+        return obstacles
+```
+
+## Inertial Measurement Unit (IMU)
+
+IMUs measure orientation, angular velocity, and linear acceleration:
+
+### Components
+
+| Sensor | Measures | Units |
+|--------|----------|-------|
+| **Accelerometer** | Linear acceleration | m/s² |
+| **Gyroscope** | Angular velocity | rad/s |
+| **Magnetometer** | Magnetic field | μT |
+
+### 6-DOF vs 9-DOF IMU
+
+```
+6-DOF IMU:
+  - 3-axis accelerometer
+  - 3-axis gyroscope
+
+9-DOF IMU:
+  - 3-axis accelerometer
+  - 3-axis gyroscope
+  - 3-axis magnetometer (compass)
+```
+
+### IMU Data Processing
+
+```python
+import numpy as np
+from scipy.spatial.transform import Rotation
+
+class IMUProcessor:
+    def __init__(self):
+        self.orientation = Rotation.identity()
+        self.velocity = np.zeros(3)
+        self.position = np.zeros(3)
+        
+    def update(self, accel, gyro, dt):
+        """Update state estimate from IMU readings"""
+        # Update orientation from gyroscope
+        delta_rotation = Rotation.from_rotvec(gyro * dt)
+        self.orientation = self.orientation * delta_rotation
+        
+        # Remove gravity from accelerometer
+        gravity = np.array([0, 0, 9.81])
+        accel_world = self.orientation.apply(accel) - gravity
+        
+        # Integrate to get velocity and position
+        self.velocity += accel_world * dt
+        self.position += self.velocity * dt
+        
+        return self.orientation, self.velocity, self.position
+    
+    def get_euler_angles(self):
+        """Get roll, pitch, yaw in degrees"""
+        return self.orientation.as_euler('xyz', degrees=True)
+```
+
+### IMU Drift Problem
+
+IMUs suffer from **drift** over time due to sensor noise:
+
+```
+True Position: ────────────────────▶
+                   
+IMU Estimate:  ─────────╲
+                         ╲
+                          ╲───────▶  ← Accumulated error
+```
+
+**Solution**: Sensor fusion with GPS, cameras, or other sensors.
+
+## Force/Torque Sensors
+
+These sensors measure interaction forces between the robot and environment:
+
+### Types
+
+| Type | Location | Use |
+|------|----------|-----|
+| **6-axis F/T** | Wrist | Manipulation forces |
+| **Joint Torque** | Each joint | Compliant control |
+| **Foot Pressure** | Feet | Ground contact, balance |
+
+### Applications
+
+```python
+class ForceController:
+    def __init__(self, target_force=10.0):
+        self.target_force = target_force
+        self.kp = 0.1  # Proportional gain
+        
+    def compute_velocity(self, measured_force):
+        """Compute velocity to achieve target force"""
+        force_error = self.target_force - measured_force
+        velocity_command = self.kp * force_error
+        return velocity_command
+    
+    def detect_contact(self, force_reading, threshold=5.0):
+        """Detect if robot has made contact"""
+        return np.linalg.norm(force_reading) > threshold
+```
+
+## Tactile Sensors
+
+Tactile sensors provide touch information for manipulation:
+
+### Technologies
+
+| Technology | Resolution | Flexibility | Cost |
+|------------|------------|-------------|------|
+| **Resistive** | Medium | Low | Low |
+| **Capacitive** | High | Medium | Medium |
+| **Optical (GelSight)** | Very High | High | High |
+
+```python
+class TactileSensor:
+    def __init__(self, resolution=(32, 32)):
+        self.resolution = resolution
+        
+    def get_contact_map(self):
+        """Get pressure distribution across sensor"""
+        # Returns a 2D array of pressure values
+        return self.read_sensor_array()
+    
+    def estimate_contact_location(self, contact_map):
+        """Find center of pressure"""
+        total_pressure = np.sum(contact_map)
+        if total_pressure == 0:
+            return None
+            
+        y_indices, x_indices = np.meshgrid(
+            range(contact_map.shape[0]),
+            range(contact_map.shape[1]),
+            indexing='ij'
+        )
+        
+        center_x = np.sum(x_indices * contact_map) / total_pressure
+        center_y = np.sum(y_indices * contact_map) / total_pressure
+        
+        return (center_x, center_y)
+```
+
+## Sensor Fusion
+
+Combining multiple sensors improves accuracy and reliability:
+
+### Common Fusion Approaches
+
+| Method | Complexity | Use Case |
+|--------|------------|----------|
+| **Complementary Filter** | Low | IMU orientation |
+| **Kalman Filter** | Medium | State estimation |
+| **Particle Filter** | High | Localization |
+| **Factor Graphs** | High | Full SLAM |
+
+```python
+class SensorFusion:
+    """Simple complementary filter for IMU + Vision"""
+    
+    def __init__(self, alpha=0.98):
+        self.alpha = alpha  # Trust gyro more for short-term
+        self.orientation = 0.0
+        
+    def update(self, gyro_rate, vision_angle, dt):
+        """Fuse gyroscope and vision orientation"""
+        # Gyro integration (fast but drifts)
+        gyro_angle = self.orientation + gyro_rate * dt
+        
+        # Complementary filter
+        self.orientation = (
+            self.alpha * gyro_angle +      # Trust gyro short-term
+            (1 - self.alpha) * vision_angle # Trust vision long-term
+        )
+        
+        return self.orientation
+```
+
+## Summary
+
+Key takeaways about sensor systems:
+
+1. **Multiple modalities** - Humanoids need vision, depth, IMU, and force sensing
+2. **Sensor fusion** - Combining sensors improves accuracy
+3. **Trade-offs** - Each sensor has strengths and limitations
+4. **Processing** - Raw sensor data requires significant processing
+
+## Exercises
+
+1. **Implementation**: Write code to process depth camera data and find the closest obstacle.
+
+2. **Analysis**: Compare the pros and cons of LiDAR vs stereo cameras for robot navigation.
+
+3. **Design**: Propose a sensor suite for a humanoid robot designed for household tasks.
+
+## Next Steps
+
+Proceed to [Module 2: ROS 2 Fundamentals](/ros2-fundamentals) to learn how to integrate these sensors into a robot software system.

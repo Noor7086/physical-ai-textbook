@@ -1,0 +1,543 @@
+---
+sidebar_position: 2
+title: "Workstation Setup"
+description: "Complete development workstation setup guide for physical AI with GPU acceleration, CUDA, Docker, and ROS 2"
+---
+
+# Workstation Setup
+
+A properly configured development workstation is the foundation of your physical AI workflow. This chapter walks you through every step -- from installing Ubuntu to verifying that ROS 2, CUDA, and Docker all work together correctly.
+
+## Learning Objectives
+
+By the end of this chapter, you will have:
+
+1. A working Ubuntu 22.04 LTS installation optimized for robotics development
+2. NVIDIA GPU drivers and CUDA toolkit properly installed and verified
+3. Docker with NVIDIA GPU passthrough for containerized development
+4. ROS 2 Humble installed and confirmed operational
+5. A tested end-to-end pipeline from simulation to inference
+
+## Hardware Requirements
+
+### Minimum Specifications
+
+These are the absolute minimums to run the software stack in this textbook.
+
+| Component | Minimum | Recommended | Notes |
+|-----------|---------|-------------|-------|
+| **GPU** | RTX 3060 (12 GB) | RTX 4070 Ti+ (12 GB+) | Must be NVIDIA; AMD GPUs lack CUDA/Isaac Sim support |
+| **CPU** | 6 cores / 12 threads | 8+ cores / 16+ threads | ROS 2 runs many concurrent processes |
+| **RAM** | 16 GB DDR4 | 32 GB DDR5 | Gazebo + ROS 2 + model inference in parallel |
+| **Storage** | 512 GB NVMe SSD | 1 TB NVMe SSD | Isaac Sim ~30 GB, Docker images ~20-50 GB |
+| **Motherboard** | PCIe 4.0 x16 slot | PCIe 4.0/5.0 x16 | Full bandwidth for GPU |
+| **PSU** | 650W 80+ Bronze | 850W 80+ Gold | RTX 4090 requires 450W alone |
+| **Network** | Ethernet or WiFi | Gigabit Ethernet | ROS 2 DDS communication is sensitive to network quality |
+
+### GPU VRAM Requirements by Workload
+
+```
+┌────────────────────────────────────────────────────────────┐
+│               GPU VRAM Usage by Task                       │
+├────────────────────────────────────────────────────────────┤
+│                                                            │
+│  Task                              VRAM Needed             │
+│  ─────────────────────────────     ──────────              │
+│  ROS 2 + Gazebo (basic)           2-4 GB                   │
+│  PyTorch inference (ResNet-50)    ~2 GB                    │
+│  Isaac Sim (single scene)         6-8 GB                   │
+│  RL training (PPO, simple env)    4-6 GB                   │
+│  Isaac Sim + RL domain rand.      10-16 GB                 │
+│  Large vision model fine-tune     16-24 GB                 │
+│  Multi-env parallel training      20-24 GB                 │
+│                                                            │
+│  ████░░░░░░░░ 12 GB = RTX 3060/4070 Ti                    │
+│  ████████████████████████ 24 GB = RTX 3090/4090            │
+└────────────────────────────────────────────────────────────┘
+```
+
+## Step 1: Ubuntu 22.04 LTS Installation
+
+ROS 2 Humble has Tier 1 support on Ubuntu 22.04 (Jammy Jellyfish). This is the required OS version.
+
+### Download and Create Boot Media
+
+```bash
+# Download Ubuntu 22.04.4 LTS desktop ISO
+wget https://releases.ubuntu.com/22.04/ubuntu-22.04.4-desktop-amd64.iso
+
+# Create bootable USB (replace /dev/sdX with your USB device)
+# WARNING: This will erase the USB drive
+sudo dd if=ubuntu-22.04.4-desktop-amd64.iso of=/dev/sdX bs=4M status=progress
+sync
+```
+
+### Post-Install System Update
+
+After a fresh Ubuntu installation, update everything before installing drivers:
+
+```bash
+# Full system update
+sudo apt update && sudo apt upgrade -y
+
+# Install essential build tools
+sudo apt install -y \
+    build-essential \
+    cmake \
+    git \
+    curl \
+    wget \
+    vim \
+    htop \
+    net-tools \
+    software-properties-common \
+    apt-transport-https \
+    ca-certificates \
+    gnupg \
+    lsb-release \
+    python3-pip \
+    python3-venv
+
+# Verify kernel version (should be 5.15+ for Ubuntu 22.04)
+uname -r
+```
+
+### Configure System for Real-Time Performance
+
+Robotics workloads benefit from reduced kernel latency:
+
+```bash
+# Increase file descriptor limits for ROS 2 DDS
+echo "* soft nofile 65536" | sudo tee -a /etc/security/limits.conf
+echo "* hard nofile 65536" | sudo tee -a /etc/security/limits.conf
+
+# Disable CPU frequency scaling for consistent performance
+sudo apt install -y cpufrequtils
+echo 'GOVERNOR="performance"' | sudo tee /etc/default/cpufrequtils
+sudo systemctl restart cpufrequtils
+
+# Increase shared memory for DDS (ROS 2 middleware)
+echo "net.core.rmem_max=2147483647" | sudo tee -a /etc/sysctl.conf
+echo "net.core.rmem_default=2147483647" | sudo tee -a /etc/sysctl.conf
+sudo sysctl -p
+```
+
+## Step 2: NVIDIA Driver Installation
+
+### Remove Any Existing Drivers
+
+```bash
+# Remove old NVIDIA drivers if present
+sudo apt purge -y 'nvidia-*'
+sudo apt autoremove -y
+
+# Block nouveau (open-source NVIDIA driver that conflicts)
+echo "blacklist nouveau" | sudo tee /etc/modprobe.d/blacklist-nouveau.conf
+echo "options nouveau modeset=0" | sudo tee -a /etc/modprobe.d/blacklist-nouveau.conf
+sudo update-initramfs -u
+```
+
+### Install NVIDIA Driver via apt
+
+```bash
+# Add NVIDIA driver PPA
+sudo add-apt-repository -y ppa:graphics-drivers/ppa
+sudo apt update
+
+# List available drivers
+ubuntu-drivers devices
+
+# Install the recommended driver (535+ required for CUDA 12.2)
+sudo apt install -y nvidia-driver-535
+
+# Reboot to load the new driver
+sudo reboot
+```
+
+### Verify Driver Installation
+
+```bash
+# After reboot, verify the driver is loaded
+nvidia-smi
+```
+
+Expected output (your GPU model and memory will differ):
+
+```
++-----------------------------------------------------------------------------+
+| NVIDIA-SMI 535.183.01   Driver Version: 535.183.01   CUDA Version: 12.2     |
+|-------------------------------+----------------------+----------------------+
+| GPU  Name        Persistence-M| Bus-Id        Disp.A | Volatile Uncorr. ECC |
+| Fan  Temp  Perf  Pwr:Usage/Cap|         Memory-Usage | GPU-Util  Compute M. |
+|===============================+======================+======================|
+|   0  NVIDIA GeForce ...  Off  | 00000000:01:00.0  On |                  N/A |
+|  0%   38C    P8    15W / 350W |    412MiB / 24564MiB |      1%      Default |
++-------------------------------+----------------------+----------------------+
+```
+
+## Step 3: CUDA Toolkit Installation
+
+### Install CUDA 12.2
+
+```bash
+# Download CUDA 12.2 keyring
+wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb
+sudo dpkg -i cuda-keyring_1.1-1_all.deb
+sudo apt update
+
+# Install CUDA toolkit (not the driver -- we already installed it)
+sudo apt install -y cuda-toolkit-12-2
+
+# Add CUDA to your PATH
+echo 'export PATH=/usr/local/cuda-12.2/bin:$PATH' >> ~/.bashrc
+echo 'export LD_LIBRARY_PATH=/usr/local/cuda-12.2/lib64:$LD_LIBRARY_PATH' >> ~/.bashrc
+source ~/.bashrc
+```
+
+### Install cuDNN
+
+```bash
+# Install cuDNN 8.9 for CUDA 12
+sudo apt install -y libcudnn8 libcudnn8-dev
+
+# Verify cuDNN installation
+cat /usr/include/cudnn_version.h | grep CUDNN_MAJOR -A 2
+```
+
+### Verify CUDA Installation
+
+```bash
+# Check CUDA compiler version
+nvcc --version
+
+# Compile and run a CUDA sample
+cd /usr/local/cuda-12.2/extras/demo_suite
+./deviceQuery
+```
+
+### Quick Python Verification
+
+```python
+#!/usr/bin/env python3
+"""verify_gpu.py -- Verify CUDA is accessible from Python."""
+import subprocess
+import sys
+
+def check_nvidia_smi():
+    """Check that nvidia-smi runs and reports a GPU."""
+    result = subprocess.run(
+        ["nvidia-smi", "--query-gpu=name,memory.total,driver_version",
+         "--format=csv,noheader"],
+        capture_output=True, text=True
+    )
+    if result.returncode != 0:
+        print("FAIL: nvidia-smi not found or returned error")
+        return False
+    print(f"GPU detected: {result.stdout.strip()}")
+    return True
+
+def check_pytorch_cuda():
+    """Check that PyTorch can see CUDA."""
+    try:
+        import torch
+        if torch.cuda.is_available():
+            print(f"PyTorch CUDA: {torch.cuda.get_device_name(0)}")
+            print(f"CUDA version: {torch.version.cuda}")
+            print(f"cuDNN version: {torch.backends.cudnn.version()}")
+
+            # Quick computation test
+            x = torch.randn(1000, 1000, device="cuda")
+            y = torch.matmul(x, x.T)
+            print(f"Matrix multiply test: OK (result shape: {y.shape})")
+            return True
+        else:
+            print("FAIL: PyTorch installed but CUDA not available")
+            return False
+    except ImportError:
+        print("WARN: PyTorch not installed yet (install later)")
+        return True
+
+if __name__ == "__main__":
+    results = [check_nvidia_smi(), check_pytorch_cuda()]
+    if all(results):
+        print("\nAll GPU checks passed.")
+    else:
+        print("\nSome checks failed. Review output above.")
+        sys.exit(1)
+```
+
+```bash
+# Run the verification script
+python3 verify_gpu.py
+```
+
+## Step 4: Docker Setup
+
+Docker provides reproducible environments and is used extensively in robotics for packaging ROS 2 workspaces and deploying to Jetson.
+
+### Install Docker Engine
+
+```bash
+# Add Docker GPG key and repository
+sudo mkdir -p /etc/apt/keyrings
+curl -fsSL https://download.docker.com/linux/ubuntu/gpg | \
+    sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+
+echo "deb [arch=$(dpkg --print-architecture) \
+    signed-by=/etc/apt/keyrings/docker.gpg] \
+    https://download.docker.com/linux/ubuntu \
+    $(lsb_release -cs) stable" | \
+    sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+
+sudo apt update
+sudo apt install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
+
+# Add your user to the docker group (avoids needing sudo)
+sudo usermod -aG docker $USER
+newgrp docker
+```
+
+### Install NVIDIA Container Toolkit
+
+This allows Docker containers to access your GPU:
+
+```bash
+# Add NVIDIA container toolkit repository
+distribution=$(. /etc/os-release; echo $ID$VERSION_ID)
+curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | \
+    sudo gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
+curl -s -L https://nvidia.github.io/libnvidia-container/$distribution/libnvidia-container.list | \
+    sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' | \
+    sudo tee /etc/apt/sources.list.d/nvidia-container-toolkit.list
+
+sudo apt update
+sudo apt install -y nvidia-container-toolkit
+
+# Configure Docker to use NVIDIA runtime
+sudo nvidia-ctk runtime configure --runtime=docker
+sudo systemctl restart docker
+```
+
+### Verify Docker GPU Access
+
+```bash
+# Test GPU access inside a container
+docker run --rm --gpus all nvidia/cuda:12.2.0-base-ubuntu22.04 nvidia-smi
+```
+
+You should see the same `nvidia-smi` output as on your host. If you see an error about the NVIDIA runtime, ensure you ran `nvidia-ctk runtime configure` and restarted Docker.
+
+### Useful Docker Compose for ROS 2 + GPU
+
+```yaml
+# docker-compose.gpu.yml
+version: "3.8"
+services:
+  ros2-dev:
+    image: osrf/ros:humble-desktop
+    container_name: ros2_gpu_dev
+    runtime: nvidia
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=all
+      - DISPLAY=${DISPLAY}
+      - QT_X11_NO_MITSHM=1
+    volumes:
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+      - ./workspace:/ros2_ws:rw
+    network_mode: host
+    privileged: true
+    stdin_open: true
+    tty: true
+    command: bash
+```
+
+```bash
+# Launch the container
+docker compose -f docker-compose.gpu.yml up -d
+
+# Attach to it
+docker exec -it ros2_gpu_dev bash
+```
+
+## Step 5: ROS 2 Humble Installation
+
+### Install ROS 2 (Native -- Recommended for Primary Development)
+
+```bash
+# Add ROS 2 GPG key
+sudo curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key \
+    -o /usr/share/keyrings/ros-archive-keyring.gpg
+
+# Add ROS 2 repository
+echo "deb [arch=$(dpkg --print-architecture) \
+    signed-by=/usr/share/keyrings/ros-archive-keyring.gpg] \
+    http://packages.ros.org/ros2/ubuntu \
+    $(. /etc/os-release && echo $UBUNTU_CODENAME) main" | \
+    sudo tee /etc/apt/sources.list.d/ros2.list > /dev/null
+
+sudo apt update
+
+# Install ROS 2 Humble Desktop (includes RViz, Gazebo bridge, demos)
+sudo apt install -y ros-humble-desktop
+
+# Install development tools
+sudo apt install -y \
+    python3-colcon-common-extensions \
+    python3-rosdep \
+    python3-vcstool \
+    ros-humble-rmw-cyclonedds-cpp
+
+# Initialize rosdep
+sudo rosdep init
+rosdep update
+```
+
+### Configure ROS 2 Environment
+
+```bash
+# Add ROS 2 sourcing to your shell
+echo "source /opt/ros/humble/setup.bash" >> ~/.bashrc
+
+# Set CycloneDDS as the default middleware (better for local dev)
+echo "export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp" >> ~/.bashrc
+
+# Set a unique ROS_DOMAIN_ID to avoid conflicts on shared networks
+echo "export ROS_DOMAIN_ID=42" >> ~/.bashrc
+
+source ~/.bashrc
+```
+
+### Verify ROS 2 Installation
+
+```bash
+# Check ROS 2 is sourced
+echo $ROS_DISTRO
+# Expected: humble
+
+# Run the talker/listener demo in two terminals
+# Terminal 1:
+ros2 run demo_nodes_cpp talker
+
+# Terminal 2:
+ros2 run demo_nodes_cpp listener
+```
+
+If the listener prints messages from the talker, your ROS 2 installation is working correctly.
+
+### Full Verification Script
+
+```bash
+#!/bin/bash
+# verify_workstation.sh -- Complete workstation verification
+set -e
+
+echo "=== Physical AI Workstation Verification ==="
+echo ""
+
+# 1. OS Check
+echo "[1/6] Operating System"
+lsb_release -a 2>/dev/null | grep "Description"
+echo ""
+
+# 2. NVIDIA Driver
+echo "[2/6] NVIDIA Driver"
+nvidia-smi --query-gpu=name,driver_version,memory.total --format=csv,noheader
+echo ""
+
+# 3. CUDA
+echo "[3/6] CUDA Toolkit"
+nvcc --version | grep "release"
+echo ""
+
+# 4. Docker + GPU
+echo "[4/6] Docker with GPU"
+docker run --rm --gpus all nvidia/cuda:12.2.0-base-ubuntu22.04 \
+    nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null
+echo ""
+
+# 5. ROS 2
+echo "[5/6] ROS 2"
+source /opt/ros/humble/setup.bash
+echo "ROS_DISTRO=$ROS_DISTRO"
+ros2 --version 2>/dev/null || ros2 doctor --report 2>/dev/null | head -5
+echo ""
+
+# 6. Python environment
+echo "[6/6] Python"
+python3 --version
+python3 -c "import torch; print(f'PyTorch {torch.__version__}, CUDA: {torch.cuda.is_available()}')" 2>/dev/null || echo "PyTorch not yet installed"
+echo ""
+
+echo "=== Verification Complete ==="
+```
+
+```bash
+chmod +x verify_workstation.sh
+./verify_workstation.sh
+```
+
+## Troubleshooting Common Issues
+
+| Problem | Likely Cause | Fix |
+|---------|-------------|-----|
+| `nvidia-smi` not found | Driver not installed or not loaded | Reinstall driver, check `dmesg \| grep nvidia` |
+| `nvcc` not found | CUDA not in PATH | Add `/usr/local/cuda-12.2/bin` to `$PATH` in `~/.bashrc` |
+| Docker "permission denied" | User not in docker group | Run `sudo usermod -aG docker $USER` and log out/in |
+| Docker GPU "could not select device" | NVIDIA Container Toolkit missing | Install `nvidia-container-toolkit` and restart Docker |
+| ROS 2 nodes cannot communicate | DDS middleware issue or firewall | Check `ROS_DOMAIN_ID` matches, verify `RMW_IMPLEMENTATION`, disable UFW temporarily |
+| Gazebo black screen | GPU driver issue or X11 forwarding | Run `glxinfo \| grep renderer` to verify GPU rendering |
+| Low simulation FPS | Insufficient GPU or CPU | Monitor with `nvidia-smi` and `htop`; reduce scene complexity |
+
+## Recommended Development Tools
+
+```bash
+# IDE: Visual Studio Code with ROS 2 extensions
+sudo snap install code --classic
+
+# Install useful VS Code extensions
+code --install-extension ms-python.python
+code --install-extension ms-vscode.cmake-tools
+code --install-extension ms-iot.vscode-ros
+code --install-extension ms-vscode-remote.remote-containers
+
+# Terminal multiplexer (essential for running multiple ROS 2 nodes)
+sudo apt install -y tmux
+
+# System monitoring
+sudo apt install -y nvtop    # GPU monitoring (better than nvidia-smi for live view)
+```
+
+## Summary
+
+After completing this chapter, your workstation stack should look like this:
+
+```
+┌────────────────────────────────────────────────┐
+│                Applications                    │
+│  VS Code  |  RViz 2  |  Gazebo  |  Isaac Sim  │
+├────────────────────────────────────────────────┤
+│              ROS 2 Humble                      │
+│  Nodes  |  Topics  |  Services  |  Actions     │
+├────────────────────────────────────────────────┤
+│              Docker + NVIDIA Runtime           │
+├────────────────────────────────────────────────┤
+│   CUDA 12.2  |  cuDNN 8.9  |  TensorRT 8.6    │
+├────────────────────────────────────────────────┤
+│         NVIDIA Driver 535+                     │
+├────────────────────────────────────────────────┤
+│         Ubuntu 22.04 LTS (Kernel 5.15+)        │
+├────────────────────────────────────────────────┤
+│         Hardware: NVIDIA RTX GPU + CPU + RAM   │
+└────────────────────────────────────────────────┘
+```
+
+## Exercises
+
+1. Run the full verification script and confirm all six checks pass.
+2. Launch a ROS 2 `talker` node inside a Docker container with GPU access and subscribe to it from your host machine.
+3. Monitor GPU utilization with `nvtop` while running a Gazebo simulation from Module 3.
+
+## Next Steps
+
+Continue to [Jetson Kit](./jetson-kit) to learn how to set up an NVIDIA Jetson edge device for deploying your models onto real robots.

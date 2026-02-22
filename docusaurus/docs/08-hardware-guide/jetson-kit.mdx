@@ -1,0 +1,691 @@
+---
+sidebar_position: 3
+title: "Jetson Development Kit"
+description: "Setting up NVIDIA Jetson Orin for edge AI inference, ROS 2 deployment, and peripheral integration in physical AI systems"
+---
+
+# Jetson Development Kit
+
+The NVIDIA Jetson platform is the standard edge compute platform for robotics AI. It brings GPU-accelerated inference to size, weight, and power (SWaP) constrained environments -- exactly where robots operate. This chapter covers selecting, flashing, configuring, and benchmarking Jetson devices for physical AI workloads.
+
+## Learning Objectives
+
+By the end of this chapter, you will be able to:
+
+1. **Choose** the right Jetson module for your project requirements
+2. **Flash** a Jetson device with JetPack SDK
+3. **Configure** the device for ROS 2 and AI inference
+4. **Connect** cameras, IMUs, and other peripherals
+5. **Run** ROS 2 nodes on Jetson with GPU-accelerated inference
+6. **Benchmark** inference performance across different model architectures
+
+## Jetson Orin Platform Comparison
+
+NVIDIA offers several Jetson Orin modules targeting different performance and cost points. For physical AI learning, the Orin Nano and Orin NX are the most relevant.
+
+### Orin Nano vs Orin NX
+
+| Specification | Jetson Orin Nano 8GB | Jetson Orin NX 16GB |
+|--------------|---------------------|---------------------|
+| **GPU** | 1024-core Ampere | 1024-core Ampere |
+| **GPU AI Performance** | 40 TOPS (INT8) | 100 TOPS (INT8) |
+| **CPU** | 6-core Arm Cortex-A78AE | 8-core Arm Cortex-A78AE |
+| **Memory** | 8 GB LPDDR5 | 16 GB LPDDR5 |
+| **Memory Bandwidth** | 68 GB/s | 102.4 GB/s |
+| **Storage** | NVMe SSD (not included) | NVMe SSD (not included) |
+| **Video Encode** | 1080p @ 30fps | 2x 4K @ 30fps |
+| **Video Decode** | 4K @ 30fps | 2x 4K @ 60fps |
+| **CSI Camera** | Up to 4 cameras | Up to 6 cameras |
+| **PCIe** | 1x PCIe Gen3 x4 | 1x PCIe Gen4 x8 |
+| **USB** | 3x USB 3.2 Gen2 | 3x USB 3.2 Gen2 |
+| **Power** | 7-15W | 10-25W |
+| **Price (Dev Kit)** | ~$500 | ~$900 |
+| **Best For** | Learning, simple perception | Multi-camera, complex models |
+
+### Decision Guide
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│            Which Jetson Should You Buy?                       │
+├──────────────────────────────────────────────────────────────┤
+│                                                              │
+│  Your workload:                                              │
+│                                                              │
+│  Single camera + small model (MobileNet, YOLO-tiny)          │
+│  └──▶ Jetson Orin Nano 8GB ($499)                            │
+│                                                              │
+│  Multi-camera + medium model (YOLO-v8, ResNet-50)            │
+│  └──▶ Jetson Orin NX 16GB ($899)                             │
+│                                                              │
+│  Whole-body control + large vision-language model             │
+│  └──▶ Jetson AGX Orin 64GB ($1,999) [outside beginner scope] │
+│                                                              │
+│  Budget is the primary constraint                            │
+│  └──▶ Jetson Orin Nano 8GB -- surprisingly capable           │
+│                                                              │
+└──────────────────────────────────────────────────────────────┘
+```
+
+## What Ships in the Developer Kit Box
+
+The Jetson Orin Nano Developer Kit includes:
+
+- Jetson Orin Nano module (pre-attached to carrier board)
+- Carrier board with I/O connectors
+- 19V power supply
+- Quick start guide
+
+**You need to separately purchase:**
+- MicroSD card (32 GB+) or NVMe M.2 SSD (recommended, 256 GB+)
+- USB keyboard and mouse (for initial setup)
+- HDMI monitor (for initial setup)
+- USB-C data cable (for flashing via SDK Manager)
+- Ethernet cable (recommended for initial package downloads)
+
+## Step 1: Flashing with JetPack SDK
+
+JetPack is NVIDIA's SDK for Jetson. It includes the Linux kernel, CUDA, cuDNN, TensorRT, and multimedia APIs, all pre-integrated.
+
+### Option A: SDK Manager (Recommended)
+
+The NVIDIA SDK Manager runs on your development workstation (Ubuntu 22.04 or 20.04) and flashes the Jetson over USB.
+
+```bash
+# On your WORKSTATION (not the Jetson):
+
+# 1. Download SDK Manager from NVIDIA Developer site
+# https://developer.nvidia.com/sdk-manager
+
+# 2. Install it
+sudo apt install -y ./sdkmanager_*_amd64.deb
+
+# 3. Connect Jetson to workstation via USB-C
+# Put Jetson in recovery mode:
+#   - Hold RECOVERY button
+#   - Press and release RESET button
+#   - Release RECOVERY button after 2 seconds
+
+# 4. Verify Jetson is detected
+lsusb | grep -i nvidia
+# Should show: NVIDIA Corp. APX
+
+# 5. Launch SDK Manager
+sdkmanager
+```
+
+In the SDK Manager GUI:
+1. Select your Jetson model (Orin Nano or Orin NX)
+2. Select JetPack 6.0 (latest)
+3. Accept licenses
+4. Choose storage target (NVMe SSD recommended over SD card)
+5. Click "Flash" and wait (~15-30 minutes)
+
+### Option B: Command-Line Flashing
+
+For headless or automated setups:
+
+```bash
+# Download L4T (Linux for Tegra) BSP
+wget https://developer.nvidia.com/downloads/embedded/l4t/r36_release_v3.0/release/jetson_linux_r36.3.0_aarch64.tbz2
+wget https://developer.nvidia.com/downloads/embedded/l4t/r36_release_v3.0/release/tegra_linux_sample-root-filesystem_r36.3.0_aarch64.tbz2
+
+# Extract
+sudo tar xpf jetson_linux_r36.3.0_aarch64.tbz2
+cd Linux_for_Tegra/rootfs/
+sudo tar xpf ../../tegra_linux_sample-root-filesystem_r36.3.0_aarch64.tbz2
+cd ..
+
+# Apply binaries
+sudo ./apply_binaries.sh
+
+# Flash (Jetson must be in recovery mode)
+# For Orin Nano:
+sudo ./flash.sh jetson-orin-nano-devkit nvme0n1p1
+```
+
+## Step 2: Initial System Configuration
+
+After flashing, boot the Jetson with a monitor, keyboard, and mouse attached.
+
+### First Boot Setup
+
+The Ubuntu-based setup wizard will guide you through language, timezone, user account, and network. After completing it:
+
+```bash
+# Update the system
+sudo apt update && sudo apt upgrade -y
+
+# Verify JetPack version
+cat /etc/nv_tegra_release
+# Expected: # R36 (release), REVISION: 3.0, ...
+
+# Check CUDA is pre-installed
+nvcc --version
+# Expected: Cuda compilation tools, release 12.2, V12.2.xxx
+
+# Verify GPU with a quick test
+/usr/local/cuda/extras/demo_suite/deviceQuery
+```
+
+### Maximize Performance Mode
+
+```bash
+# Set to maximum performance mode (MAXN)
+sudo nvpmodel -m 0
+
+# Enable all CPU cores at maximum frequency
+sudo jetson_clocks
+
+# Verify power mode
+nvpmodel -q
+# Expected: NV Power Mode: MAXN
+```
+
+### Configure Swap Space
+
+Jetson devices have limited RAM. Adding swap prevents out-of-memory kills during model loading:
+
+```bash
+# Create a 4 GB swap file (adjust size based on your workload)
+sudo fallocate -l 4G /swapfile
+sudo chmod 600 /swapfile
+sudo mkswap /swapfile
+sudo swapon /swapfile
+
+# Make persistent across reboots
+echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
+
+# Verify
+free -h
+```
+
+## Step 3: JetPack SDK Components
+
+JetPack 6.0 pre-installs these key libraries:
+
+```
+┌─────────────────────────────────────────────────┐
+│               JetPack 6.0 Stack                 │
+├─────────────────────────────────────────────────┤
+│  TensorRT 8.6    | Optimized inference engine   │
+│  cuDNN 8.9       | Deep learning primitives     │
+│  CUDA 12.2       | GPU compute                  │
+│  VPI 3.0         | Vision processing            │
+│  Multimedia API   | Video encode/decode          │
+│  DeepStream 6.4  | Video analytics pipeline     │
+├─────────────────────────────────────────────────┤
+│  Ubuntu 22.04 (aarch64) + Linux Kernel 5.15     │
+├─────────────────────────────────────────────────┤
+│  Jetson Orin Hardware (Ampere GPU + Arm CPU)     │
+└─────────────────────────────────────────────────┘
+```
+
+### Verify All Components
+
+```bash
+# Check TensorRT
+dpkg -l | grep tensorrt
+python3 -c "import tensorrt; print(f'TensorRT {tensorrt.__version__}')"
+
+# Check cuDNN
+dpkg -l | grep cudnn
+
+# Check VPI (Vision Programming Interface)
+dpkg -l | grep vpi
+python3 -c "import vpi; print('VPI OK')"
+
+# Check CUDA samples
+cd /usr/local/cuda/samples/1_Utilities/deviceQuery
+sudo make
+./deviceQuery
+```
+
+## Step 4: Connecting Peripherals
+
+### Camera Setup (USB and CSI)
+
+```bash
+# USB Camera (e.g., Logitech C920, Intel RealSense)
+# Verify detection
+lsusb
+v4l2-ctl --list-devices
+
+# Test USB camera feed
+sudo apt install -y v4l-utils
+v4l2-ctl --device=/dev/video0 --all
+
+# CSI Camera (e.g., IMX219, IMX477)
+# CSI cameras connect via the flat ribbon cable to the CSI connector
+# Verify CSI camera
+ls /dev/video*
+# CSI cameras typically appear as /dev/video0
+
+# Capture a test frame with GStreamer
+gst-launch-1.0 nvarguscamerasrc num-buffers=1 ! \
+    'video/x-raw(memory:NVMM),width=1920,height=1080,framerate=30/1' ! \
+    nvjpegenc ! filesink location=test_capture.jpg
+```
+
+### IMU Setup (via I2C or USB)
+
+```bash
+# For I2C-connected IMU (e.g., BNO055, MPU-9250)
+# Enable I2C
+sudo apt install -y i2c-tools
+
+# Scan for I2C devices
+sudo i2cdetect -y -r 1
+# You should see a device address (e.g., 0x28 for BNO055)
+
+# For USB IMU (e.g., Microstrain, Xsens)
+lsusb
+# Install the corresponding ROS 2 driver (see Step 5)
+```
+
+### Intel RealSense Depth Camera
+
+```bash
+# Install RealSense SDK for Jetson (ARM64 build)
+sudo apt-key adv --keyserver keyserver.ubuntu.com \
+    --recv-key F6E65AC044F831AC80A06380C8B3A55A6F3EFCDE
+
+sudo add-apt-repository \
+    "deb https://librealsense.intel.com/Debian/apt-repo $(lsb_release -cs) main"
+
+sudo apt update
+sudo apt install -y librealsense2-utils librealsense2-dev
+
+# Test the camera
+realsense-viewer
+```
+
+## Step 5: ROS 2 on Jetson
+
+### Install ROS 2 Humble
+
+```bash
+# Add ROS 2 repository (same as workstation, but aarch64 packages)
+sudo curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key \
+    -o /usr/share/keyrings/ros-archive-keyring.gpg
+
+echo "deb [arch=$(dpkg --print-architecture) \
+    signed-by=/usr/share/keyrings/ros-archive-keyring.gpg] \
+    http://packages.ros.org/ros2/ubuntu \
+    $(. /etc/os-release && echo $UBUNTU_CODENAME) main" | \
+    sudo tee /etc/apt/sources.list.d/ros2.list > /dev/null
+
+sudo apt update
+
+# Install ROS 2 base (no GUI tools -- save resources)
+sudo apt install -y ros-humble-ros-base
+
+# Install additional useful packages
+sudo apt install -y \
+    python3-colcon-common-extensions \
+    python3-rosdep \
+    ros-humble-rmw-cyclonedds-cpp \
+    ros-humble-image-transport \
+    ros-humble-cv-bridge \
+    ros-humble-realsense2-camera \
+    ros-humble-imu-tools
+
+# Source ROS 2
+echo "source /opt/ros/humble/setup.bash" >> ~/.bashrc
+echo "export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp" >> ~/.bashrc
+source ~/.bashrc
+
+# Initialize rosdep
+sudo rosdep init 2>/dev/null || true
+rosdep update
+```
+
+### Camera Node Example
+
+```python
+#!/usr/bin/env python3
+"""jetson_camera_node.py -- Publish camera frames with GPU-accelerated processing."""
+import rclpy
+from rclpy.node import Node
+from sensor_msgs.msg import Image
+from cv_bridge import CvBridge
+import cv2
+import numpy as np
+
+class JetsonCameraNode(Node):
+    def __init__(self):
+        super().__init__('jetson_camera')
+
+        # GStreamer pipeline for CSI camera with hardware acceleration
+        # For USB camera, use: cv2.VideoCapture(0)
+        gst_pipeline = (
+            "nvarguscamerasrc ! "
+            "video/x-raw(memory:NVMM),width=640,height=480,framerate=30/1 ! "
+            "nvvidconv ! video/x-raw,format=BGRx ! "
+            "videoconvert ! video/x-raw,format=BGR ! "
+            "appsink drop=1"
+        )
+        self.cap = cv2.VideoCapture(gst_pipeline, cv2.CAP_GSTREAMER)
+
+        if not self.cap.isOpened():
+            self.get_logger().error("Failed to open camera")
+            return
+
+        self.publisher = self.create_publisher(Image, '/camera/image_raw', 10)
+        self.bridge = CvBridge()
+        self.timer = self.create_timer(1.0 / 30.0, self.publish_frame)
+        self.frame_count = 0
+
+        self.get_logger().info("Jetson camera node started (30 FPS)")
+
+    def publish_frame(self):
+        ret, frame = self.cap.read()
+        if not ret:
+            self.get_logger().warn("Frame capture failed")
+            return
+
+        msg = self.bridge.cv2_to_imgmsg(frame, encoding='bgr8')
+        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.header.frame_id = 'camera_link'
+        self.publisher.publish(msg)
+
+        self.frame_count += 1
+        if self.frame_count % 100 == 0:
+            self.get_logger().info(f"Published {self.frame_count} frames")
+
+    def destroy_node(self):
+        self.cap.release()
+        super().destroy_node()
+
+def main(args=None):
+    rclpy.init(args=args)
+    node = JetsonCameraNode()
+    rclpy.spin(node)
+    node.destroy_node()
+    rclpy.shutdown()
+
+if __name__ == '__main__':
+    main()
+```
+
+### TensorRT Inference Node
+
+```python
+#!/usr/bin/env python3
+"""jetson_detector_node.py -- Object detection with TensorRT on Jetson."""
+import rclpy
+from rclpy.node import Node
+from sensor_msgs.msg import Image
+from vision_msgs.msg import Detection2DArray, Detection2D, ObjectHypothesisWithPose
+from cv_bridge import CvBridge
+import numpy as np
+import tensorrt as trt
+import pycuda.driver as cuda
+import pycuda.autoinit
+import time
+
+class TensorRTDetector(Node):
+    def __init__(self):
+        super().__init__('tensorrt_detector')
+
+        # Load TensorRT engine
+        self.declare_parameter('engine_path', 'model.engine')
+        engine_path = self.get_parameter('engine_path').value
+
+        self.logger = trt.Logger(trt.Logger.WARNING)
+        with open(engine_path, 'rb') as f:
+            runtime = trt.Runtime(self.logger)
+            self.engine = runtime.deserialize_cuda_engine(f.read())
+        self.context = self.engine.create_execution_context()
+
+        # Allocate GPU buffers
+        self.inputs, self.outputs, self.bindings, self.stream = \
+            self._allocate_buffers()
+
+        self.bridge = CvBridge()
+        self.subscription = self.create_subscription(
+            Image, '/camera/image_raw', self.detect_callback, 10
+        )
+        self.detection_pub = self.create_publisher(
+            Detection2DArray, '/detections', 10
+        )
+
+        self.get_logger().info(f"TensorRT detector loaded: {engine_path}")
+
+    def _allocate_buffers(self):
+        """Allocate host and device memory for TensorRT engine."""
+        inputs, outputs, bindings = [], [], []
+        stream = cuda.Stream()
+
+        for i in range(self.engine.num_io_tensors):
+            name = self.engine.get_tensor_name(i)
+            shape = self.engine.get_tensor_shape(name)
+            dtype = trt.nptype(self.engine.get_tensor_dtype(name))
+            size = trt.volume(shape)
+            host_mem = cuda.pagelocked_empty(size, dtype)
+            device_mem = cuda.mem_alloc(host_mem.nbytes)
+            bindings.append(int(device_mem))
+
+            if self.engine.get_tensor_mode(name) == trt.TensorIOMode.INPUT:
+                inputs.append({'host': host_mem, 'device': device_mem})
+            else:
+                outputs.append({'host': host_mem, 'device': device_mem})
+
+        return inputs, outputs, bindings, stream
+
+    def detect_callback(self, msg):
+        """Run inference on incoming camera frame."""
+        start = time.monotonic()
+
+        frame = self.bridge.imgmsg_to_cv2(msg, 'bgr8')
+        # Preprocess: resize, normalize, transpose to NCHW
+        input_img = self._preprocess(frame)
+
+        # Copy to GPU, run inference, copy results back
+        np.copyto(self.inputs[0]['host'], input_img.ravel())
+        cuda.memcpy_htod_async(
+            self.inputs[0]['device'], self.inputs[0]['host'], self.stream
+        )
+        self.context.execute_async_v2(
+            bindings=self.bindings, stream_handle=self.stream.handle
+        )
+        for out in self.outputs:
+            cuda.memcpy_dtoh_async(out['host'], out['device'], self.stream)
+        self.stream.synchronize()
+
+        elapsed_ms = (time.monotonic() - start) * 1000
+        self.get_logger().info(
+            f"Inference: {elapsed_ms:.1f}ms", throttle_duration_sec=2.0
+        )
+
+    def _preprocess(self, frame, input_size=(640, 640)):
+        """Resize and normalize frame for YOLO-style models."""
+        import cv2
+        img = cv2.resize(frame, input_size)
+        img = img.astype(np.float32) / 255.0
+        img = np.transpose(img, (2, 0, 1))  # HWC -> CHW
+        img = np.expand_dims(img, axis=0)    # Add batch dim
+        return np.ascontiguousarray(img)
+
+def main(args=None):
+    rclpy.init(args=args)
+    node = TensorRTDetector()
+    rclpy.spin(node)
+    node.destroy_node()
+    rclpy.shutdown()
+
+if __name__ == '__main__':
+    main()
+```
+
+## Step 6: Performance Benchmarks
+
+### Converting Models to TensorRT
+
+TensorRT optimizes models for Jetson hardware. Convert your ONNX models:
+
+```bash
+# Convert ONNX model to TensorRT engine
+# FP16 mode gives ~2x speedup on Orin with minimal accuracy loss
+/usr/src/tensorrt/bin/trtexec \
+    --onnx=yolov8n.onnx \
+    --saveEngine=yolov8n_fp16.engine \
+    --fp16 \
+    --workspace=1024 \
+    --verbose
+
+# INT8 mode gives best performance (requires calibration data)
+/usr/src/tensorrt/bin/trtexec \
+    --onnx=yolov8n.onnx \
+    --saveEngine=yolov8n_int8.engine \
+    --int8 \
+    --calib=calibration_cache.bin \
+    --workspace=1024
+```
+
+### Benchmark Results (Typical)
+
+Performance varies with model size, precision, and input resolution. These are representative numbers for common robotics models on Jetson Orin devices:
+
+| Model | Input Size | Precision | Orin Nano (ms) | Orin NX (ms) | FPS (Orin NX) |
+|-------|-----------|-----------|----------------|--------------|---------------|
+| YOLOv8n | 640x640 | FP16 | 18 | 8 | 125 |
+| YOLOv8s | 640x640 | FP16 | 35 | 15 | 67 |
+| YOLOv8m | 640x640 | FP16 | 70 | 30 | 33 |
+| ResNet-50 | 224x224 | FP16 | 5 | 2.5 | 400 |
+| MobileNetV3 | 224x224 | FP16 | 2 | 1.2 | 833 |
+| DepthAnything (small) | 518x518 | FP16 | 25 | 12 | 83 |
+| CLIP ViT-B/32 | 224x224 | FP16 | 12 | 6 | 167 |
+
+### Running Your Own Benchmarks
+
+```bash
+# Benchmark an engine file
+/usr/src/tensorrt/bin/trtexec \
+    --loadEngine=yolov8n_fp16.engine \
+    --iterations=1000 \
+    --warmUp=500 \
+    --avgRuns=100
+
+# Monitor system resources during benchmark
+# Terminal 1:
+tegrastats
+
+# Expected tegrastats output:
+# RAM 3200/7620MB | CPU [45%@2016,50%@2016,40%@2016,38%@2016,0%@0,0%@0]
+# GR3D_FREQ 90% | VIC_FREQ 0% | EMC_FREQ 51% | NVJPG1 0
+```
+
+### Power vs Performance Tradeoffs
+
+```python
+#!/usr/bin/env python3
+"""benchmark_power_modes.py -- Compare inference across Jetson power modes."""
+import subprocess
+import time
+import numpy as np
+
+POWER_MODES = {
+    "15W": 0,   # MAXN for Orin Nano
+    "10W": 1,   # Reduced power
+    "7W": 2,    # Minimum power
+}
+
+def set_power_mode(mode_id):
+    subprocess.run(["sudo", "nvpmodel", "-m", str(mode_id)], check=True)
+    time.sleep(2)  # Allow clocks to settle
+
+def run_benchmark(engine_path, iterations=100):
+    result = subprocess.run(
+        ["/usr/src/tensorrt/bin/trtexec",
+         f"--loadEngine={engine_path}",
+         f"--iterations={iterations}",
+         "--avgRuns=10"],
+        capture_output=True, text=True
+    )
+    # Parse median latency from output
+    for line in result.stdout.split('\n'):
+        if 'median' in line.lower():
+            return line.strip()
+    return "Parse error"
+
+if __name__ == "__main__":
+    engine = "yolov8n_fp16.engine"
+    for name, mode_id in POWER_MODES.items():
+        print(f"\n=== Power Mode: {name} ===")
+        set_power_mode(mode_id)
+        result = run_benchmark(engine)
+        print(f"  {result}")
+```
+
+## Jetson Tips and Best Practices
+
+1. **Always use NVMe SSD** over SD card. The read/write speed difference (3500 MB/s vs 100 MB/s) dramatically impacts model loading and system responsiveness.
+
+2. **Use FP16 by default.** On Orin's Ampere GPU, FP16 operations run at nearly 2x the speed of FP32 with negligible accuracy loss for most robotics perception tasks.
+
+3. **Monitor thermal throttling.** Jetson will reduce clock speeds when temperature exceeds ~85C. Use a heatsink or active fan.
+
+```bash
+# Check current temperature
+cat /sys/devices/virtual/thermal/thermal_zone*/temp
+# Values are in millidegrees Celsius (e.g., 45000 = 45.0C)
+```
+
+4. **Set `MAXN` power mode** during development. You can reduce power for deployment later.
+
+5. **Use headless mode** in production. Disabling the desktop environment frees ~500 MB RAM.
+
+```bash
+# Switch to headless mode
+sudo systemctl set-default multi-user.target
+sudo reboot
+
+# Switch back to desktop if needed
+sudo systemctl set-default graphical.target
+sudo reboot
+```
+
+## Troubleshooting
+
+| Problem | Solution |
+|---------|----------|
+| Jetson not detected in recovery mode | Try a different USB-C cable (data cable, not charge-only); try the other USB-C port |
+| Boot loop after flash | Re-flash with SDK Manager; ensure power supply is 19V/4.5A |
+| `nvcc` not found | Add `/usr/local/cuda/bin` to `$PATH` |
+| CSI camera not detected | Check ribbon cable orientation (contacts face the heatsink); run `dmesg \| grep imx` |
+| Out of memory during inference | Enable swap (Step 2); reduce batch size; use smaller model |
+| Low FPS on inference | Verify you are using TensorRT engine (not raw ONNX); check power mode is `MAXN` |
+
+## Summary
+
+Your Jetson edge compute stack should now look like this:
+
+```
+┌─────────────────────────────────────────────────┐
+│          ROS 2 Humble Nodes                     │
+│  Camera | Detector | IMU | Controller           │
+├─────────────────────────────────────────────────┤
+│  TensorRT 8.6 (optimized inference engines)     │
+├─────────────────────────────────────────────────┤
+│  CUDA 12.2 | cuDNN 8.9 | VPI 3.0               │
+├─────────────────────────────────────────────────┤
+│  JetPack 6.0 (Ubuntu 22.04 aarch64)            │
+├─────────────────────────────────────────────────┤
+│  Jetson Orin Nano/NX Hardware                   │
+│  ┌───────┐  ┌───────┐  ┌───────┐               │
+│  │Camera │  │  IMU  │  │ Motor │               │
+│  │(CSI)  │  │(I2C)  │  │(UART) │               │
+│  └───────┘  └───────┘  └───────┘               │
+└─────────────────────────────────────────────────┘
+```
+
+## Exercises
+
+1. Flash a Jetson device with JetPack 6.0 and verify all SDK components.
+2. Connect a USB camera and publish frames as a ROS 2 topic at 30 FPS.
+3. Convert a YOLOv8n ONNX model to a TensorRT FP16 engine and measure latency.
+4. Subscribe to camera images in one node, run TensorRT inference, and publish detections on another topic.
+
+## Next Steps
+
+Continue to [Robot Options](./robot-options) to explore the full range of robot platforms -- from simulation-only setups to affordable wheeled robots and humanoid systems.

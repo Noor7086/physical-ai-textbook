@@ -1,0 +1,163 @@
+---
+sidebar_position: 1
+title: "Conversational Robotics"
+description: "Enabling robots to understand, interpret, and respond to human speech and multimodal input for natural interaction"
+---
+
+# Conversational Robotics
+
+Welcome to **Module 6** of the Physical AI & Humanoid Robotics course. This module explores the critical intersection of natural language processing and robotics -- enabling machines to communicate with humans through speech, language understanding, and multimodal interaction.
+
+## Why Robots Need to Communicate
+
+For decades, robots have been controlled through specialized interfaces: teach pendants, joysticks, scripted programs, and graphical user interfaces. While effective for trained operators, these control methods create a fundamental barrier between robots and the general population. If humanoid robots are to work alongside people in homes, hospitals, warehouses, and offices, they must communicate the way humans do -- through natural language.
+
+Consider the difference between these two interactions:
+
+```
+# Traditional robot control
+robot.move_joint(joint_id=3, angle=45.0, speed=0.5)
+robot.open_gripper(width=0.08)
+robot.move_cartesian(x=0.5, y=0.2, z=0.3)
+robot.close_gripper(force=10.0)
+```
+
+```
+# Conversational robot control
+"Pick up the red cup on the table and bring it to me."
+```
+
+The second approach is accessible to anyone who can speak. No programming knowledge, no training manual, no specialized interface. This is the promise of conversational robotics.
+
+## Speech as a Natural Interface
+
+Speech is the most natural and bandwidth-rich communication channel humans possess. We produce roughly 150 words per minute in casual conversation, conveying not just semantic content but also emotion, urgency, and intent through prosody, pitch, and rhythm. A conversational robot that can process all of these signals gains a far richer understanding of human needs than one limited to text commands.
+
+### The Conversational Robotics Stack
+
+Building a robot that can hold a conversation and act on instructions requires a layered architecture:
+
+```
+┌─────────────────────────────────────────────────┐
+│           Multimodal Fusion Layer               │
+│   (Speech + Vision + Gesture + Context)         │
+├─────────────────────────────────────────────────┤
+│           Dialogue Management                   │
+│   (State tracking, turn-taking, clarification)  │
+├─────────────────────────────────────────────────┤
+│         Natural Language Understanding          │
+│   (Intent recognition, entity extraction)       │
+├─────────────────────────────────────────────────┤
+│        Automatic Speech Recognition (ASR)       │
+│   (Audio to text transcription)                 │
+├─────────────────────────────────────────────────┤
+│           Audio Capture & Processing            │
+│   (Microphone arrays, noise cancellation)       │
+└─────────────────────────────────────────────────┘
+```
+
+Each layer in this stack presents unique engineering challenges when deployed on a physical robot operating in noisy, dynamic environments.
+
+| Layer | Challenge | Robotic Context |
+|-------|-----------|-----------------|
+| **Audio Capture** | Background noise, reverberation | Factory floors, kitchens, outdoor environments |
+| **ASR** | Accents, domain vocabulary | Medical terminology, tool names, proper nouns |
+| **NLU** | Ambiguity, implicit references | "Put that over there" requires spatial reasoning |
+| **Dialogue** | Context persistence, repair | Multi-turn instructions with corrections |
+| **Multimodal Fusion** | Temporal alignment | Pointing gesture must align with spoken "this one" |
+
+## Learning Objectives
+
+By the end of this module, you will be able to:
+
+1. **Implement** automatic speech recognition using OpenAI Whisper and integrate it with ROS 2 nodes
+2. **Build** a natural language understanding pipeline that converts spoken commands into structured robot actions
+3. **Design** intent recognition systems using both rule-based and LLM-based approaches
+4. **Develop** safety constraints that validate commands before robot execution
+5. **Create** multimodal interaction systems combining speech, vision, and gesture recognition
+6. **Apply** Vision-Language Models (VLMs) for grounded, context-aware robot dialogue
+7. **Evaluate** conversational robotics systems for accuracy, latency, and safety
+
+## Module Overview -- Week 13
+
+This module covers **Week 13** of the course and is organized into three chapters:
+
+### Chapter 1: Speech Recognition
+- Audio signal processing fundamentals
+- OpenAI Whisper architecture and deployment
+- Real-time transcription with streaming audio
+- ROS 2 integration for speech input nodes
+- Handling noise and far-field audio in robotic environments
+
+### Chapter 2: Voice-to-Action
+- Natural Language Understanding (NLU) pipelines
+- Intent recognition and slot filling
+- LLM-based command parsing with structured output
+- Action planning from natural language instructions
+- Safety constraints and command validation
+
+### Chapter 3: Multimodal Interaction
+- Combining speech with computer vision
+- Gesture recognition and deictic reference resolution
+- Vision-Language Models for scene understanding
+- Context-aware dialogue management
+- Building a complete interactive robot assistant
+
+## The Evolution of Robot Communication
+
+Understanding where conversational robotics sits in the broader arc of human-robot interaction helps frame the significance of this work:
+
+| Era | Interface | Example |
+|-----|-----------|---------|
+| **1960s--1980s** | Teach pendants and punch cards | Industrial arms with fixed programs |
+| **1980s--2000s** | Scripting languages and GUIs | ROS command-line tools, rviz |
+| **2000s--2015** | Gesture and touch | Kinect-based interaction, tablet controllers |
+| **2015--2020** | Voice assistants (limited) | Alexa-controlled home robots, keyword spotting |
+| **2020--present** | LLM-powered conversation | Open-ended dialogue, multimodal grounding, VLMs |
+
+The current generation of conversational robots benefits enormously from the transformer revolution. Models like Whisper, GPT-4, and multimodal VLMs provide capabilities that were simply not possible five years ago -- enabling robots to understand ambiguous instructions, ask clarifying questions, and reason about the physical world through language.
+
+## Key Concepts Preview
+
+Before diving into the chapters, here are the core concepts you will encounter:
+
+- **Automatic Speech Recognition (ASR):** Transforming raw audio waveforms into text transcripts. We will use OpenAI's Whisper, a robust encoder-decoder transformer trained on 680,000 hours of multilingual audio.
+
+- **Natural Language Understanding (NLU):** Extracting structured meaning -- intents, entities, and relations -- from raw text so a robot can act on instructions.
+
+- **Intent Recognition:** Classifying what a user wants the robot to do (e.g., `pick_up`, `navigate_to`, `describe_scene`).
+
+- **Slot Filling:** Identifying the parameters of an intent (e.g., object="red cup", location="kitchen table").
+
+- **Grounding:** Connecting language references ("the blue box") to specific physical objects perceived through sensors.
+
+- **Vision-Language Models (VLMs):** Neural networks that jointly process images and text, enabling robots to answer questions about what they see.
+
+- **Dialogue Management:** Maintaining conversation state across multiple turns, handling clarification requests, and managing turn-taking.
+
+## Prerequisites
+
+Before starting this module, you should be comfortable with:
+
+- **Python programming** including classes, async/await, and working with APIs
+- **ROS 2 fundamentals** (Modules 2--3): nodes, topics, services, and launch files
+- **Basic machine learning concepts**: neural networks, inference, model loading
+- **Linux command line**: package installation, environment management
+
+## Hardware and Software Requirements
+
+| Component | Requirement |
+|-----------|-------------|
+| **Microphone** | USB microphone or array (ReSpeaker recommended for robotics) |
+| **GPU** | NVIDIA GPU with 4+ GB VRAM (for local Whisper inference) |
+| **Python** | 3.10+ |
+| **ROS 2** | Humble Hawksbill or later |
+| **Key Libraries** | `openai-whisper`, `transformers`, `torch`, `sounddevice`, `numpy` |
+
+## Summary
+
+Conversational robotics represents a paradigm shift from programming robots to talking with them. By combining automatic speech recognition, natural language understanding, and multimodal perception, we can create robots that are accessible to anyone -- not just engineers and programmers. This module will take you from raw audio capture through to a complete multimodal interactive assistant, with every component integrated into the ROS 2 ecosystem.
+
+## Next Steps
+
+Continue to [Speech Recognition](./speech-recognition) to learn how to capture audio, run Whisper inference, and publish transcription results as ROS 2 messages.

@@ -1,0 +1,90 @@
+---
+sidebar_position: 1
+title: "Introduction to Physical AI"
+description: "Understanding the foundations of Physical AI and its role in humanoid robotics"
+---
+
+# Introduction to Physical AI
+
+Welcome to the fascinating world of **Physical AI** - where artificial intelligence meets the physical world. This module introduces you to the foundational concepts that will guide your journey through humanoid robotics.
+
+## What is Physical AI?
+
+**Physical AI** refers to AI systems that function in reality and comprehend physical laws. Unlike traditional AI that operates purely in digital spaces (processing text, images, or data), Physical AI interacts with the real world through:
+
+- **Sensors** - Perceiving the environment (cameras, LiDAR, IMUs)
+- **Actuators** - Taking physical actions (motors, grippers, joints)
+- **Real-time Processing** - Making decisions in dynamic environments
+- **Physical Understanding** - Comprehending gravity, friction, and spatial relationships
+
+```python
+# Example: A Physical AI system combines perception and action
+class PhysicalAIRobot:
+    def __init__(self):
+        self.sensors = ["camera", "lidar", "imu"]
+        self.actuators = ["arm_motors", "leg_motors"]
+        self.ai_brain = "neural_network"
+    
+    def perceive(self):
+        """Gather data from all sensors"""
+        return self.process_sensor_data()
+    
+    def decide(self, perception):
+        """AI decides the next action"""
+        return self.ai_brain.inference(perception)
+    
+    def act(self, decision):
+        """Execute physical actions"""
+        for actuator in self.actuators:
+            actuator.execute(decision)
+```
+
+## Why Physical AI Matters
+
+The future of AI extends beyond digital spaces into the physical world. Consider these transformative applications:
+
+| Domain | Physical AI Application |
+|--------|------------------------|
+| **Manufacturing** | Robots assembling complex products alongside humans |
+| **Healthcare** | Assistive robots helping elderly and disabled individuals |
+| **Logistics** | Autonomous systems handling warehouse operations |
+| **Exploration** | Robots exploring hazardous environments |
+| **Domestic** | Household robots performing daily tasks |
+
+## The Human-Robot Partnership
+
+The future of work will be a **partnership between people, intelligent agents (AI software), and robots**. This shift won't eliminate jobs but will change what humans do, leading to massive demand for new skills.
+
+### Key Insight
+
+> Humanoid robots are poised to excel in our human-centered world because they share our physical form and can be trained with abundant data from interacting in human environments.
+
+## Learning Objectives
+
+By the end of this module, you will be able to:
+
+1. **Define** Physical AI and distinguish it from traditional AI
+2. **Explain** the components of embodied intelligence
+3. **Identify** key sensor systems used in humanoid robotics
+4. **Describe** the current landscape of humanoid robots
+5. **Understand** the human-robot interaction paradigm
+
+## Module Overview
+
+This module covers **Weeks 1-2** of the course:
+
+- **Embodied Intelligence** - The philosophy and science of intelligence in physical form
+- **Humanoid Landscape** - Current state of humanoid robotics industry
+- **Sensor Systems** - LiDAR, cameras, IMUs, and force/torque sensors
+
+## Prerequisites
+
+Before starting this module, you should have:
+
+- Basic understanding of programming (Python recommended)
+- Familiarity with fundamental physics concepts
+- Interest in robotics and AI
+
+## Next Steps
+
+Continue to [Embodied Intelligence](./embodied-intelligence) to explore how intelligence manifests in physical systems.

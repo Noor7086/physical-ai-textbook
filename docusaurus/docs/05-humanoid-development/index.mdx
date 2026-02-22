@@ -1,0 +1,142 @@
+---
+sidebar_position: 1
+title: "Humanoid Development"
+description: "Building humanoid robot capabilities through kinematics, locomotion, and manipulation"
+---
+
+# Humanoid Development
+
+Welcome to **Module 5**, where we move from simulation and platform tools into the core engineering disciplines that make a humanoid robot move, walk, and interact with objects. This module covers **Weeks 11-12** of the course and represents the transition from foundational knowledge to applied humanoid robotics.
+
+## Why Humanoid Form Factor?
+
+The world is built for humans. Doorways, staircases, tools, furniture, vehicles, and workspaces all assume a bipedal body with two arms and dexterous hands. A humanoid robot inherits the ability to operate in these spaces without requiring environmental modification.
+
+There are several compelling reasons to pursue the humanoid form:
+
+| Advantage | Explanation |
+|-----------|-------------|
+| **Environment compatibility** | Navigates human-designed spaces (stairs, doors, narrow corridors) |
+| **Tool use** | Manipulates objects and tools designed for human hands |
+| **Social interaction** | Intuitive communication through gestures and body language |
+| **Data abundance** | Billions of hours of human motion data available for learning |
+| **Versatility** | A single platform adaptable to many tasks, unlike special-purpose robots |
+
+However, humanoid development is among the hardest challenges in robotics. Bipedal locomotion is inherently unstable, dexterous manipulation requires precise force control, and the high degree-of-freedom (DoF) kinematic chains create complex planning and control problems.
+
+## The Core Challenges
+
+### 1. High-Dimensional Configuration Spaces
+
+A typical humanoid robot has 30 to 50 actuated joints. Each joint adds a dimension to the configuration space that motion planners must search. A 30-DoF robot lives in a 30-dimensional space -- finding collision-free, dynamically feasible paths in that space is computationally demanding.
+
+```python
+# A humanoid's joint configuration is a high-dimensional vector
+import numpy as np
+
+# Example: 32 joints, each with position, velocity, and torque
+num_joints = 32
+q = np.zeros(num_joints)       # Joint positions (radians)
+q_dot = np.zeros(num_joints)   # Joint velocities (rad/s)
+tau = np.zeros(num_joints)     # Joint torques (Nm)
+
+# The configuration space has 32 dimensions
+# The state space (position + velocity) has 64 dimensions
+print(f"Configuration space: R^{num_joints}")
+print(f"State space: R^{2 * num_joints}")
+```
+
+### 2. Dynamic Stability
+
+Unlike wheeled robots that are statically stable, bipedal robots are dynamically stable -- they must actively control their balance at every instant. A standing humanoid is essentially an inverted pendulum that will topple unless continuously corrected.
+
+### 3. Contact-Rich Manipulation
+
+Grasping and manipulating objects involves making and breaking contact, which introduces discontinuities in the dynamics. Planning through contact sequences is a combinatorial problem layered on top of continuous motion planning.
+
+### 4. Real-Time Constraints
+
+All of the above must happen in real time. A walking controller typically runs at 200-1000 Hz, and even brief computational delays can cause the robot to fall.
+
+## Learning Objectives
+
+By the end of this module, you will be able to:
+
+1. **Compute** forward and inverse kinematics for serial manipulator chains using DH parameters
+2. **Derive** the Jacobian matrix and use it for velocity-level inverse kinematics
+3. **Formulate** robot dynamics using the Lagrangian and Newton-Euler methods
+4. **Explain** the Zero Moment Point (ZMP) criterion for bipedal stability
+5. **Implement** a simple walking pattern generator using the Linear Inverted Pendulum Model
+6. **Design** grasp strategies using force-closure analysis
+7. **Build** pick-and-place pipelines using MoveIt 2 and ROS 2
+
+## Module Structure
+
+This module is organized into three main topics:
+
+### Kinematics and Dynamics
+The mathematical foundations for describing robot motion. You will learn how to map between joint space and task space using forward and inverse kinematics, compute the Jacobian for differential motion, and model the forces and torques that drive robot motion.
+
+### Bipedal Locomotion
+The science and engineering of making a humanoid walk. You will study the inverted pendulum model, Zero Moment Point stability criterion, Divergent Component of Motion, and practical walking pattern generation algorithms.
+
+### Manipulation and Grasping
+How humanoid hands and arms interact with objects. You will explore grasp planning, force closure, compliant control, and end-to-end pick-and-place pipelines using ROS 2 and MoveIt 2.
+
+## Prerequisites
+
+Before starting this module, you should be comfortable with:
+
+- **Linear algebra**: Matrix multiplication, eigenvalues, SVD
+- **Calculus**: Partial derivatives, chain rule, integration
+- **Python programming**: NumPy, basic OOP
+- **ROS 2 basics**: Topics, services, launch files (Module 2)
+- **Simulation**: Running robots in Gazebo (Module 3)
+
+## Tools and Libraries
+
+Throughout this module we will use:
+
+| Tool | Purpose |
+|------|---------|
+| **NumPy / SciPy** | Numerical computation for kinematics and dynamics |
+| **Matplotlib** | Visualization of trajectories and workspaces |
+| **ROS 2 Humble** | Robot middleware for communication and control |
+| **MoveIt 2** | Motion planning and manipulation framework |
+| **Gazebo** | Physics simulation for testing controllers |
+| **PyBullet** | Lightweight simulation for rapid prototyping |
+
+```python
+# Verify your environment
+import numpy as np
+import scipy
+import matplotlib
+
+print(f"NumPy version:      {np.__version__}")
+print(f"SciPy version:      {scipy.__version__}")
+print(f"Matplotlib version:  {matplotlib.__version__}")
+```
+
+## A Roadmap of the Module
+
+```
+Week 11                              Week 12
+┌─────────────────────┐    ┌─────────────────────────┐
+│  Kinematics &       │    │  Bipedal    │ Manipula-  │
+│  Dynamics           │    │  Locomotion │ tion &     │
+│                     │    │             │ Grasping   │
+│  - FK / IK          │    │  - ZMP      │ - Grasp    │
+│  - Jacobians        │    │  - LIPM     │   planning │
+│  - Lagrangian       │    │  - DCM      │ - MoveIt 2 │
+│  - Newton-Euler     │    │  - Gait gen │ - Pick &   │
+│                     │    │             │   place    │
+└─────────────────────┘    └─────────────────────────┘
+```
+
+## Summary
+
+Humanoid development sits at the intersection of mechanical engineering, control theory, and artificial intelligence. This module equips you with the mathematical and practical tools to make a humanoid robot move its limbs (kinematics and dynamics), walk stably (bipedal locomotion), and interact with objects (manipulation and grasping). Each topic builds on the previous one, and together they form the core competencies of a humanoid robotics engineer.
+
+## Next Steps
+
+Continue to [Kinematics and Dynamics](./kinematics-dynamics) to begin with the mathematical foundations of robot motion.

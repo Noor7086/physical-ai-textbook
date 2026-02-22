@@ -1,0 +1,225 @@
+---
+sidebar_position: 1
+title: "Gazebo Simulation"
+description: "Introduction to robot simulation with Gazebo for humanoid robotics development and testing"
+---
+
+# Gazebo Simulation for Humanoid Robotics
+
+Welcome to **Module 3**, where you will learn to simulate humanoid robots in realistic virtual environments. Simulation is the backbone of modern robotics development -- it lets you iterate on designs, test control algorithms, and train AI models without risking expensive hardware or waiting for physical prototypes.
+
+## What is Gazebo?
+
+**Gazebo** is an open-source 3D robotics simulator that provides the ability to accurately and efficiently simulate populations of robots in complex indoor and outdoor environments. Originally developed at the University of Southern California in 2004, Gazebo has become the de facto standard simulator in the ROS ecosystem.
+
+Gazebo provides:
+
+- **Physics Simulation** -- Rigid body dynamics, collision detection, and contact forces
+- **Sensor Simulation** -- Cameras, LiDAR, IMU, depth sensors with realistic noise models
+- **Environment Modeling** -- Complex worlds with terrain, lighting, and weather effects
+- **ROS 2 Integration** -- Seamless communication with your robot software stack
+- **Plugin Architecture** -- Extensible through custom C++ and Python plugins
+
+```python
+# Example: Launching a Gazebo simulation with a humanoid robot via ROS 2
+import subprocess
+
+def launch_humanoid_simulation():
+    """Launch Gazebo with a humanoid robot model."""
+    # Gazebo Harmonic (gz-sim) is the latest generation
+    launch_cmd = [
+        "ros2", "launch", "humanoid_gazebo",
+        "humanoid_world.launch.py",
+        "use_sim_time:=true",
+        "world:=apartment.sdf"
+    ]
+    process = subprocess.Popen(launch_cmd)
+    return process
+```
+
+### Gazebo Classic vs. Gazebo (Harmonic)
+
+The Gazebo project has undergone a major transition. The older version, often called **Gazebo Classic** (versions up to Gazebo 11), has been succeeded by a new architecture originally branded as **Ignition Gazebo**, now simply called **Gazebo** (with release names like Fortress, Garden, and Harmonic).
+
+| Feature | Gazebo Classic | Gazebo (Harmonic) |
+|---------|---------------|-------------------|
+| **Architecture** | Monolithic | Modular libraries (gz-sim, gz-physics, gz-rendering) |
+| **Physics Engines** | ODE (default), Bullet | DART (default), TPE, Bullet |
+| **Rendering** | OGRE 1.x | OGRE 2.x with PBR materials |
+| **ROS Integration** | gazebo_ros_pkgs | ros_gz bridge |
+| **Model Format** | SDF + URDF | SDF + URDF |
+| **Plugin API** | C++ | C++ with Entity Component System |
+| **Performance** | Single-threaded physics | Multi-threaded, better scaling |
+
+Throughout this module, we focus on **Gazebo Harmonic** (the latest LTS release paired with ROS 2 Humble/Jazzy), while noting differences from Classic where relevant.
+
+## Why Simulation Matters
+
+Developing humanoid robots without simulation is like writing software without a debugger. Simulation provides a **safe, fast, and cost-effective** development environment.
+
+### The Sim-to-Real Pipeline
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│                    Development Pipeline                          │
+│                                                                  │
+│  ┌──────────┐    ┌──────────────┐    ┌───────────┐              │
+│  │  Design   │───▶│  Simulate    │───▶│  Validate │              │
+│  │  (URDF)   │    │  (Gazebo)    │    │  (Tests)  │              │
+│  └──────────┘    └──────────────┘    └─────┬─────┘              │
+│                                            │                     │
+│                                     ┌──────▼──────┐             │
+│                                     │  Deploy to   │             │
+│                                     │  Real Robot   │             │
+│                                     └──────────────┘             │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+### Benefits of Simulation
+
+| Benefit | Description |
+|---------|-------------|
+| **Safety** | Test walking algorithms without damaging a \$100K+ robot |
+| **Speed** | Run thousands of training episodes faster than real time |
+| **Cost** | No hardware wear and tear during development |
+| **Reproducibility** | Reset the world state and replay exact scenarios |
+| **Parallelism** | Run hundreds of simulations simultaneously for RL training |
+| **Edge Cases** | Test rare scenarios (falls, collisions) that are dangerous in reality |
+
+### Simulation in Industry
+
+Every major humanoid robotics company relies heavily on simulation:
+
+- **NVIDIA Isaac Sim** -- GPU-accelerated simulation for training and testing
+- **Boston Dynamics** -- Internal simulation for Atlas development
+- **Tesla Optimus** -- Simulation for training manipulation policies
+- **Figure AI** -- Sim-to-real transfer for whole-body control
+
+## Setting Up Gazebo
+
+### Installation with ROS 2
+
+```bash
+# Install Gazebo Harmonic (paired with ROS 2 Jazzy)
+sudo apt-get update
+sudo apt-get install ros-jazzy-ros-gz
+
+# Or for ROS 2 Humble with Gazebo Fortress
+sudo apt-get install ros-humble-ros-gz
+
+# Verify installation
+gz sim --version
+
+# Install additional Gazebo packages for humanoid simulation
+sudo apt-get install \
+  ros-jazzy-gz-sim \
+  ros-jazzy-gz-plugin \
+  ros-jazzy-gz-sensors \
+  ros-jazzy-gz-physics
+```
+
+### Your First Simulation
+
+```bash
+# Launch an empty world
+gz sim empty.sdf
+
+# Launch a world with shapes to experiment with physics
+gz sim shapes.sdf
+
+# Launch with a specific physics engine
+gz sim shapes.sdf --physics-engine gz-physics-dart-plugin
+```
+
+### Loading a Robot Model
+
+```python
+# spawn_robot.py -- Spawn a robot into a running Gazebo simulation
+import rclpy
+from rclpy.node import Node
+from ros_gz_interfaces.srv import SpawnEntity
+
+class RobotSpawner(Node):
+    def __init__(self):
+        super().__init__('robot_spawner')
+        self.client = self.create_client(SpawnEntity, '/spawn_entity')
+        
+        while not self.client.wait_for_service(timeout_sec=1.0):
+            self.get_logger().info('Waiting for spawn service...')
+        
+    def spawn_robot(self, sdf_path, name='humanoid', x=0.0, y=0.0, z=1.0):
+        """Spawn a robot model at the specified position."""
+        request = SpawnEntity.Request()
+        request.name = name
+        request.sdf_filename = sdf_path
+        request.initial_pose.position.x = x
+        request.initial_pose.position.y = y
+        request.initial_pose.position.z = z
+        
+        future = self.client.call_async(request)
+        rclpy.spin_until_future_complete(self, future)
+        
+        if future.result().success:
+            self.get_logger().info(f'Successfully spawned {name}')
+        else:
+            self.get_logger().error(f'Failed to spawn {name}')
+
+def main():
+    rclpy.init()
+    spawner = RobotSpawner()
+    spawner.spawn_robot('/path/to/humanoid/model.sdf')
+    rclpy.shutdown()
+
+if __name__ == '__main__':
+    main()
+```
+
+## Learning Objectives
+
+By the end of this module, you will be able to:
+
+1. **Configure** Gazebo physics engines and understand their trade-offs
+2. **Build** simulation worlds with realistic physics parameters
+3. **Simulate** sensors (cameras, LiDAR, IMU, force/torque) with noise models
+4. **Bridge** Gazebo simulation data to ROS 2 nodes
+5. **Integrate** Unity for advanced visualization and digital twins
+6. **Implement** sim-to-real transfer strategies for humanoid robots
+7. **Debug** simulation issues related to physics instability and sensor calibration
+
+## Module Contents
+
+This module covers **Weeks 6-7** of the course:
+
+| Chapter | Topic | Key Concepts | Duration |
+|---------|-------|--------------|----------|
+| 3.1 | [Physics Simulation](./physics-simulation) | ODE, Bullet, DART, rigid body dynamics, collision | Week 6 |
+| 3.2 | [Sensor Simulation](./sensor-simulation) | Cameras, LiDAR, IMU, Gazebo plugins | Week 6-7 |
+| 3.3 | [Unity Integration](./unity-integration) | Unity Robotics Hub, ROS-TCP, digital twins | Week 7 |
+
+## Prerequisites
+
+Before starting this module, you should have completed:
+
+- **Module 1**: Introduction to Physical AI (sensor concepts)
+- **Module 2**: ROS 2 Fundamentals (nodes, topics, URDF)
+- A working ROS 2 installation (Humble or Jazzy)
+- Basic familiarity with XML/SDF file formats
+
+## Key Terminology
+
+| Term | Definition |
+|------|-----------|
+| **SDF** | Simulation Description Format -- XML format for describing simulation worlds and models |
+| **URDF** | Unified Robot Description Format -- XML format for describing robot kinematics |
+| **Physics Engine** | Software library that computes rigid body dynamics and collisions |
+| **Sim-to-Real** | Transferring policies or models trained in simulation to physical robots |
+| **Domain Randomization** | Varying simulation parameters to improve real-world robustness |
+| **Digital Twin** | A virtual replica of a physical robot updated in real time |
+
+## Summary
+
+Simulation is not optional in modern humanoid robotics -- it is essential. Gazebo provides an open-source, ROS 2-integrated platform for testing everything from basic joint control to full-body locomotion policies. This module will take you from basic world creation through advanced sensor simulation and Unity-based visualization.
+
+## Next Steps
+
+Start with [Physics Simulation](./physics-simulation) to understand how Gazebo models rigid body dynamics, collision detection, and the different physics engines available.

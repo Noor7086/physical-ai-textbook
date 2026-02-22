@@ -1,0 +1,860 @@
+---
+sidebar_position: 3
+title: "Bipedal Locomotion"
+description: "Walking gaits, ZMP stability, inverted pendulum models, and walking pattern generation for humanoid robots"
+---
+
+# Bipedal Locomotion
+
+Making a humanoid robot walk is one of the grand challenges of robotics. Unlike wheeled platforms that are inherently stable, a bipedal robot is a dynamically unstable system that must actively control its balance at every moment. This chapter covers the fundamental theory and practical algorithms behind humanoid walking.
+
+## Learning Objectives
+
+By the end of this chapter, you will be able to:
+
+1. **Describe** the phases of a bipedal walking gait
+2. **Explain** the Zero Moment Point (ZMP) criterion for dynamic stability
+3. **Model** a walking humanoid as a Linear Inverted Pendulum (LIPM)
+4. **Implement** a ZMP-based walking pattern generator in Python
+5. **Compute** the Divergent Component of Motion (DCM) for balance control
+6. **Generate** footstep plans and Center of Mass trajectories
+
+---
+
+## The Bipedal Walking Gait
+
+Human walking is a cyclic pattern of alternating support on each leg. Understanding this cycle is the first step to reproducing it on a robot.
+
+### Gait Phases
+
+A single walking cycle (stride) consists of the following phases for each leg:
+
+```
+One Stride = Stance Phase + Swing Phase
+
+Stance Phase (~60% of cycle):
+  ├── Heel Strike (initial contact)
+  ├── Loading Response
+  ├── Mid-stance
+  ├── Terminal Stance
+  └── Pre-swing (toe-off)
+
+Swing Phase (~40% of cycle):
+  ├── Initial Swing
+  ├── Mid-swing
+  └── Terminal Swing
+```
+
+| Phase | Duration | Description |
+|-------|----------|-------------|
+| **Double Support** | ~20% | Both feet on ground (weight transfer) |
+| **Single Support (Left)** | ~30% | Left foot supports, right swings |
+| **Double Support** | ~20% | Both feet on ground (weight transfer) |
+| **Single Support (Right)** | ~30% | Right foot supports, left swings |
+
+```python
+import numpy as np
+import matplotlib.pyplot as plt
+
+class GaitTiming:
+    """Manages the timing of a bipedal walking gait."""
+    
+    def __init__(self, step_duration=0.8, double_support_ratio=0.2):
+        """
+        Parameters
+        ----------
+        step_duration : float
+            Duration of one step (half-stride) in seconds.
+        double_support_ratio : float
+            Fraction of step spent in double support (0 to 1).
+        """
+        self.step_duration = step_duration
+        self.double_support_ratio = double_support_ratio
+        self.single_support_duration = step_duration * (1 - double_support_ratio)
+        self.double_support_duration = step_duration * double_support_ratio
+    
+    def get_phase(self, t):
+        """
+        Determine the current gait phase.
+        
+        Returns
+        -------
+        phase : str
+            'double_support' or 'single_support'
+        support_foot : str
+            'left', 'right', or 'both'
+        phase_progress : float
+            Progress within the current phase (0 to 1)
+        """
+        # Normalize time to stride cycle
+        stride_duration = 2 * self.step_duration
+        t_cycle = t % stride_duration
+        
+        # Determine which step we are in and where in the step
+        step_index = int(t_cycle / self.step_duration)
+        t_in_step = t_cycle - step_index * self.step_duration
+        
+        if t_in_step < self.double_support_duration:
+            phase = 'double_support'
+            support_foot = 'both'
+            progress = t_in_step / self.double_support_duration
+        else:
+            phase = 'single_support'
+            support_foot = 'left' if step_index == 0 else 'right'
+            progress = ((t_in_step - self.double_support_duration) /
+                        self.single_support_duration)
+        
+        return phase, support_foot, progress
+
+# Example usage
+gait = GaitTiming(step_duration=0.8, double_support_ratio=0.2)
+for t in np.arange(0, 1.6, 0.1):
+    phase, foot, progress = gait.get_phase(t)
+    print(f"t={t:.1f}s: {phase:20s} support={foot:5s} progress={progress:.2f}")
+```
+
+---
+
+## Zero Moment Point (ZMP)
+
+The **Zero Moment Point** is the point on the ground where the net moment of all active forces (gravity, inertia) has zero horizontal component. It is the most widely used stability criterion in humanoid walking.
+
+### Stability Criterion
+
+A humanoid robot is dynamically stable if and only if the ZMP lies within the **support polygon** -- the convex hull of all ground contact points.
+
+```
+                    ┌──────────┐
+                    │  Support  │
+     ZMP inside =   │  Polygon  │  = STABLE
+     robot won't    │    x ZMP  │
+     tip over       └──────────┘
+     
+                    ┌──────────┐
+                    │  Support  │
+     ZMP outside =  │  Polygon  │  x ZMP  = UNSTABLE
+     robot tips     │           │         (will fall)
+                    └──────────┘
+```
+
+### Computing the ZMP
+
+The ZMP can be computed from the Center of Mass (CoM) position and acceleration:
+
+```python
+def compute_zmp(com_pos, com_accel, com_height, gravity=9.81):
+    """
+    Compute the Zero Moment Point from CoM state.
+    
+    The ZMP formula (for flat ground at z=0):
+        x_zmp = x_com - (z_com / (g + z_ddot_com)) * x_ddot_com
+        y_zmp = y_com - (z_com / (g + z_ddot_com)) * y_ddot_com
+    
+    Parameters
+    ----------
+    com_pos : np.ndarray, shape (3,)
+        Center of mass position [x, y, z] in meters.
+    com_accel : np.ndarray, shape (3,)
+        Center of mass acceleration [x_ddot, y_ddot, z_ddot] in m/s^2.
+    com_height : float
+        Height of CoM above ground (meters), used if com_pos[2] is not set.
+    gravity : float
+        Gravitational acceleration (m/s^2).
+    
+    Returns
+    -------
+    zmp : np.ndarray, shape (2,)
+        ZMP position [x, y] on the ground plane.
+    """
+    x, y, z = com_pos
+    x_ddot, y_ddot, z_ddot = com_accel
+    
+    denom = gravity + z_ddot
+    if abs(denom) < 1e-6:
+        raise ValueError("Degenerate case: gravity + z_ddot ~ 0")
+    
+    zmp_x = x - (z / denom) * x_ddot
+    zmp_y = y - (z / denom) * y_ddot
+    
+    return np.array([zmp_x, zmp_y])
+
+
+def is_stable(zmp, support_polygon):
+    """
+    Check if the ZMP is inside the support polygon.
+    
+    Parameters
+    ----------
+    zmp : np.ndarray, shape (2,)
+    support_polygon : np.ndarray, shape (N, 2)
+        Vertices of the support polygon in order.
+    
+    Returns
+    -------
+    bool : True if stable.
+    """
+    from matplotlib.path import Path
+    polygon_path = Path(support_polygon)
+    return polygon_path.contains_point(zmp)
+
+
+# Example: single support on left foot
+left_foot_polygon = np.array([
+    [-0.12, -0.05],  # Heel left
+    [ 0.12, -0.05],  # Toe left
+    [ 0.12,  0.05],  # Toe right
+    [-0.12,  0.05],  # Heel right
+])
+
+com = np.array([0.0, 0.0, 0.85])        # CoM at 85 cm height
+accel = np.array([0.5, 0.0, 0.0])       # Accelerating forward
+
+zmp = compute_zmp(com, accel, com_height=0.85)
+stable = is_stable(zmp, left_foot_polygon)
+print(f"ZMP: ({zmp[0]:.4f}, {zmp[1]:.4f}) m")
+print(f"Stable: {stable}")
+```
+
+---
+
+## Linear Inverted Pendulum Model (LIPM)
+
+The LIPM is the workhorse model for humanoid walking. It simplifies the complex multi-body dynamics of a humanoid into a single point mass on a massless telescoping leg, constrained to move at a constant height.
+
+### Model Assumptions
+
+1. All mass concentrated at a single point (the CoM)
+2. CoM moves at constant height z_c
+3. Legs are massless
+4. Angular momentum about the CoM is zero
+
+### Equations of Motion
+
+Under these assumptions, the horizontal dynamics decouple from the vertical:
+
+```
+x_ddot = (g / z_c) * (x - p_x)
+y_ddot = (g / z_c) * (y - p_y)
+```
+
+where (x, y) is the CoM position and (p_x, p_y) is the ZMP (which equals the Center of Pressure in this model).
+
+```python
+class LinearInvertedPendulum:
+    """
+    Linear Inverted Pendulum Model for humanoid walking.
+    
+    The dynamics in each horizontal axis are:
+        x_ddot = omega^2 * (x - p_x)
+    
+    where omega = sqrt(g / z_c) is the natural frequency.
+    """
+    
+    def __init__(self, z_c=0.80, gravity=9.81):
+        """
+        Parameters
+        ----------
+        z_c : float
+            Constant CoM height (meters).
+        gravity : float
+            Gravitational acceleration (m/s^2).
+        """
+        self.z_c = z_c
+        self.gravity = gravity
+        self.omega = np.sqrt(gravity / z_c)
+    
+    def analytical_solution(self, x0, x_dot0, p_x, t):
+        """
+        Analytical solution for 1D LIPM dynamics.
+        
+        Given initial state (x0, x_dot0) and constant ZMP p_x,
+        the solution is:
+            x(t)     = (x0 - p_x) * cosh(omega * t) 
+                       + (x_dot0 / omega) * sinh(omega * t) + p_x
+            x_dot(t) = (x0 - p_x) * omega * sinh(omega * t) 
+                       + x_dot0 * cosh(omega * t)
+        """
+        omega = self.omega
+        dx0 = x0 - p_x
+        
+        x_t = dx0 * np.cosh(omega * t) + (x_dot0 / omega) * np.sinh(omega * t) + p_x
+        x_dot_t = dx0 * omega * np.sinh(omega * t) + x_dot0 * np.cosh(omega * t)
+        
+        return x_t, x_dot_t
+    
+    def simulate(self, x0, x_dot0, zmp_trajectory, dt=0.005, duration=None):
+        """
+        Simulate the LIPM with a time-varying ZMP reference.
+        
+        Parameters
+        ----------
+        x0, x_dot0 : float
+            Initial CoM position and velocity.
+        zmp_trajectory : list of (t_start, t_end, p_x)
+            Piecewise-constant ZMP reference.
+        dt : float
+            Integration time step.
+        
+        Returns
+        -------
+        times, positions, velocities : np.ndarrays
+        """
+        if duration is None:
+            duration = zmp_trajectory[-1][1]
+        
+        times = np.arange(0, duration, dt)
+        positions = np.zeros_like(times)
+        velocities = np.zeros_like(times)
+        
+        x, x_dot = x0, x_dot0
+        zmp_idx = 0
+        
+        for i, t in enumerate(times):
+            # Find current ZMP segment
+            while zmp_idx < len(zmp_trajectory) - 1 and t >= zmp_trajectory[zmp_idx][1]:
+                zmp_idx += 1
+            
+            p_x = zmp_trajectory[zmp_idx][2]
+            
+            # Euler integration of x_ddot = omega^2 * (x - p_x)
+            x_ddot = self.omega**2 * (x - p_x)
+            x_dot += x_ddot * dt
+            x += x_dot * dt
+            
+            positions[i] = x
+            velocities[i] = x_dot
+        
+        return times, positions, velocities
+
+
+# Example: walk forward with 4 steps
+lipm = LinearInvertedPendulum(z_c=0.80)
+
+# Footstep positions (alternating left/right)
+step_length = 0.20  # 20 cm steps
+step_duration = 0.8
+
+# ZMP trajectory: (t_start, t_end, zmp_x_position)
+zmp_traj = [
+    (0.0, 0.8, 0.0),            # Step 0: ZMP at origin
+    (0.8, 1.6, step_length),     # Step 1: ZMP at first footstep
+    (1.6, 2.4, 2 * step_length), # Step 2
+    (2.4, 3.2, 3 * step_length), # Step 3
+]
+
+times, com_x, com_vx = lipm.simulate(
+    x0=0.0, x_dot0=0.2, zmp_trajectory=zmp_traj
+)
+
+print(f"Final CoM position: {com_x[-1]:.3f} m")
+print(f"Final CoM velocity: {com_vx[-1]:.3f} m/s")
+```
+
+### Plotting the LIPM Trajectory
+
+```python
+def plot_lipm_walking(times, com_x, zmp_traj):
+    """Visualize CoM and ZMP trajectories during walking."""
+    fig, axes = plt.subplots(2, 1, figsize=(12, 6), sharex=True)
+    
+    # Build piecewise ZMP signal for plotting
+    zmp_times = []
+    zmp_values = []
+    for t_start, t_end, p_x in zmp_traj:
+        zmp_times.extend([t_start, t_end])
+        zmp_values.extend([p_x, p_x])
+    
+    # CoM trajectory
+    axes[0].plot(times, com_x, 'b-', linewidth=2, label='CoM x')
+    axes[0].plot(zmp_times, zmp_values, 'r--', linewidth=2, label='ZMP reference')
+    axes[0].set_ylabel('Position (m)')
+    axes[0].legend()
+    axes[0].grid(True, alpha=0.3)
+    axes[0].set_title('LIPM Walking: CoM and ZMP Trajectories')
+    
+    # CoM - ZMP difference
+    zmp_at_com_times = np.interp(times, zmp_times, zmp_values)
+    axes[1].plot(times, com_x - zmp_at_com_times, 'g-', linewidth=2)
+    axes[1].set_ylabel('CoM - ZMP (m)')
+    axes[1].set_xlabel('Time (s)')
+    axes[1].grid(True, alpha=0.3)
+    axes[1].set_title('CoM - ZMP Offset (Capture Point Indicator)')
+    
+    plt.tight_layout()
+    plt.show()
+
+plot_lipm_walking(times, com_x, zmp_traj)
+```
+
+---
+
+## Divergent Component of Motion (DCM)
+
+The DCM (also called the **Capture Point**) is a key concept in modern balance control. It represents the point on the ground where the robot must step to come to a stop.
+
+### Definition
+
+The DCM is defined as:
+
+```
+xi = x + x_dot / omega
+```
+
+where omega = sqrt(g / z_c). The DCM has a remarkable property: it moves with first-order dynamics governed by the ZMP:
+
+```
+xi_dot = omega * (xi - p)
+```
+
+This means the DCM is **repelled** from the ZMP. If the ZMP is behind the DCM, the DCM moves forward (and the robot continues walking). If the ZMP is ahead of the DCM, the DCM moves backward (the robot decelerates).
+
+```python
+class DCMPlanner:
+    """
+    Divergent Component of Motion (DCM) based walking pattern generator.
+    
+    The DCM approach plans footsteps backward from the final desired
+    state and computes the corresponding CoM trajectory.
+    """
+    
+    def __init__(self, z_c=0.80, gravity=9.81):
+        self.z_c = z_c
+        self.omega = np.sqrt(gravity / z_c)
+    
+    def compute_dcm(self, x, x_dot):
+        """Compute the DCM from CoM state."""
+        return x + x_dot / self.omega
+    
+    def plan_dcm_trajectory(self, footsteps, step_duration):
+        """
+        Plan DCM trajectory given footstep positions.
+        
+        The key insight: we plan backward from the last footstep.
+        At the end of walking, the DCM should converge to the 
+        final footstep position (standing still).
+        
+        Parameters
+        ----------
+        footsteps : list of float
+            x-positions of each footstep.
+        step_duration : float
+            Duration of each step in seconds.
+        
+        Returns
+        -------
+        dcm_waypoints : list of float
+            DCM position at the start of each step.
+        """
+        n_steps = len(footsteps)
+        dcm_eos = [0.0] * n_steps  # DCM at End Of Step
+        
+        # Final DCM = final footstep (robot stops)
+        dcm_eos[-1] = footsteps[-1]
+        
+        # Plan backward
+        for i in range(n_steps - 2, -1, -1):
+            # DCM at end of step i = DCM at beginning of step i+1
+            # xi_eos[i] = footsteps[i] + exp(-omega * T) * (dcm_eos[i+1] - footsteps[i])
+            # Rearranging the analytical DCM solution:
+            dcm_eos[i] = footsteps[i] + np.exp(-self.omega * step_duration) * (
+                dcm_eos[i + 1] - footsteps[i]
+            )
+        
+        return dcm_eos
+    
+    def interpolate_dcm(self, footsteps, dcm_waypoints, step_duration, dt=0.005):
+        """
+        Interpolate DCM between waypoints using the analytical solution.
+        
+        xi(t) = p + exp(omega * (t - t_start)) * (xi_start - p)
+        
+        where p is the current footstep (ZMP) and xi_start is the DCM
+        at the beginning of the current step.
+        """
+        n_steps = len(footsteps)
+        total_time = n_steps * step_duration
+        times = np.arange(0, total_time, dt)
+        
+        dcm_traj = np.zeros_like(times)
+        zmp_traj = np.zeros_like(times)
+        
+        for i, t in enumerate(times):
+            step_idx = min(int(t / step_duration), n_steps - 1)
+            t_in_step = t - step_idx * step_duration
+            
+            p = footsteps[step_idx]
+            
+            # DCM at start of this step
+            if step_idx == 0:
+                xi_start = dcm_waypoints[0]
+            else:
+                xi_start = dcm_waypoints[step_idx - 1]  # end of prev = start of current
+            
+            # Analytical DCM evolution
+            dcm_traj[i] = p + np.exp(self.omega * t_in_step) * (xi_start - p)
+            zmp_traj[i] = p
+        
+        return times, dcm_traj, zmp_traj
+    
+    def recover_com_from_dcm(self, times, dcm_traj, x0, dt=0.005):
+        """
+        Recover CoM trajectory from DCM using: x_dot = omega * (xi - x)
+        
+        This is a stable first-order filter from DCM to CoM.
+        """
+        com_traj = np.zeros_like(times)
+        com_traj[0] = x0
+        
+        for i in range(1, len(times)):
+            x_dot = self.omega * (dcm_traj[i - 1] - com_traj[i - 1])
+            com_traj[i] = com_traj[i - 1] + x_dot * dt
+        
+        return com_traj
+
+
+# Example: plan a 5-step walk
+dcm_planner = DCMPlanner(z_c=0.80)
+
+step_length = 0.20
+step_duration = 0.8
+
+# Footstep positions (first step is smaller for starting)
+footsteps = [0.0, 0.10, 0.30, 0.50, 0.70, 0.80]
+
+dcm_waypoints = dcm_planner.plan_dcm_trajectory(footsteps, step_duration)
+print("DCM waypoints at end of each step:")
+for i, (fs, dcm) in enumerate(zip(footsteps, dcm_waypoints)):
+    print(f"  Step {i}: footstep={fs:.3f} m, DCM={dcm:.3f} m")
+
+# Generate full trajectory
+times, dcm_traj, zmp_traj = dcm_planner.interpolate_dcm(
+    footsteps, dcm_waypoints, step_duration
+)
+com_traj = dcm_planner.recover_com_from_dcm(times, dcm_traj, x0=0.0)
+
+print(f"\nFinal CoM: {com_traj[-1]:.3f} m")
+print(f"Final DCM: {dcm_traj[-1]:.3f} m")
+print(f"Target stop position: {footsteps[-1]:.3f} m")
+```
+
+---
+
+## Walking Pattern Generation
+
+A complete walking pattern generator combines footstep planning, CoM trajectory generation, and swing foot trajectory planning.
+
+### Footstep Planning
+
+```python
+class FootstepPlanner:
+    """Generate a sequence of footsteps for forward walking."""
+    
+    def __init__(self, step_length=0.20, step_width=0.15):
+        """
+        Parameters
+        ----------
+        step_length : float
+            Forward distance per step (meters).
+        step_width : float
+            Lateral distance between feet (meters).
+        """
+        self.step_length = step_length
+        self.step_width = step_width
+    
+    def plan_straight_walk(self, n_steps, start_foot='left'):
+        """
+        Plan footsteps for walking in a straight line.
+        
+        Returns
+        -------
+        footsteps : list of dict
+            Each dict has 'foot', 'x', 'y', 'theta' (yaw angle).
+        """
+        footsteps = []
+        feet = ['left', 'right'] if start_foot == 'left' else ['right', 'left']
+        
+        for i in range(n_steps):
+            foot = feet[i % 2]
+            x = i * self.step_length
+            y = self.step_width / 2 if foot == 'left' else -self.step_width / 2
+            
+            # First and last steps are shorter (acceleration/deceleration)
+            if i == 0:
+                x = 0
+            elif i == 1:
+                x = self.step_length * 0.5
+            
+            footsteps.append({
+                'foot': foot,
+                'x': x,
+                'y': y,
+                'theta': 0.0,
+                'step_index': i,
+            })
+        
+        return footsteps
+
+# Plan 8 steps
+planner = FootstepPlanner(step_length=0.20, step_width=0.15)
+footsteps = planner.plan_straight_walk(n_steps=8)
+
+print("Planned footsteps:")
+print(f"{'Step':>4} {'Foot':>6} {'X (m)':>8} {'Y (m)':>8}")
+print("-" * 30)
+for fs in footsteps:
+    print(f"{fs['step_index']:4d} {fs['foot']:>6} {fs['x']:8.3f} {fs['y']:8.3f}")
+```
+
+### Swing Foot Trajectory
+
+During the swing phase, the foot must move from its current position to the next footstep position, lifting off the ground to clear obstacles:
+
+```python
+def generate_swing_trajectory(start_pos, end_pos, swing_height=0.05,
+                                duration=0.6, dt=0.005):
+    """
+    Generate a smooth swing foot trajectory using cubic spline interpolation.
+    
+    The foot lifts to swing_height at the midpoint and lands at end_pos.
+    
+    Parameters
+    ----------
+    start_pos : np.ndarray, shape (3,) - [x, y, z] start
+    end_pos : np.ndarray, shape (3,) - [x, y, z] end
+    swing_height : float - maximum foot lift height (meters)
+    duration : float - swing phase duration (seconds)
+    dt : float - time step
+    
+    Returns
+    -------
+    times : np.ndarray
+    trajectory : np.ndarray, shape (N, 3) - foot positions
+    """
+    times = np.arange(0, duration, dt)
+    n = len(times)
+    trajectory = np.zeros((n, 3))
+    
+    for i, t in enumerate(times):
+        s = t / duration  # Normalized phase [0, 1]
+        
+        # Smooth interpolation using cubic polynomial
+        # s_smooth provides zero velocity at start and end
+        s_smooth = 3 * s**2 - 2 * s**3
+        
+        # X and Y: linear interpolation with smooth profile
+        trajectory[i, 0] = start_pos[0] + s_smooth * (end_pos[0] - start_pos[0])
+        trajectory[i, 1] = start_pos[1] + s_smooth * (end_pos[1] - start_pos[1])
+        
+        # Z: parabolic lift profile (zero at start and end, max at midpoint)
+        trajectory[i, 2] = 4 * swing_height * s * (1 - s)
+    
+    return times, trajectory
+
+
+# Generate swing from left foot to next position
+start = np.array([0.0, 0.075, 0.0])
+end = np.array([0.20, 0.075, 0.0])
+
+swing_times, swing_traj = generate_swing_trajectory(
+    start, end, swing_height=0.05, duration=0.6
+)
+
+print(f"Swing start: {swing_traj[0]}")
+print(f"Swing peak height: {swing_traj[:, 2].max():.4f} m at "
+      f"t={swing_times[np.argmax(swing_traj[:, 2])]:.3f} s")
+print(f"Swing end: {swing_traj[-1]}")
+```
+
+---
+
+## Balance Control
+
+Even with perfect trajectory planning, disturbances will push the robot off its planned path. Balance controllers detect and correct these perturbations in real time.
+
+### ZMP-Based Balance Control
+
+```python
+class ZMPBalanceController:
+    """
+    Simple ZMP-based balance controller.
+    
+    Adjusts the CoM acceleration to keep the ZMP inside the 
+    support polygon when disturbances occur.
+    """
+    
+    def __init__(self, z_c=0.80, gravity=9.81):
+        self.z_c = z_c
+        self.gravity = gravity
+        self.omega_sq = gravity / z_c
+        
+        # Controller gains
+        self.kp = 1.5   # Proportional gain on ZMP error
+        self.kd = 0.3   # Derivative gain
+        
+        self.prev_error = 0.0
+    
+    def compute_correction(self, zmp_desired, zmp_measured, dt):
+        """
+        Compute a CoM acceleration correction to drive the
+        measured ZMP toward the desired ZMP.
+        
+        Parameters
+        ----------
+        zmp_desired : float - desired ZMP position (1D)
+        zmp_measured : float - measured/estimated ZMP position
+        dt : float - time step
+        
+        Returns
+        -------
+        com_accel_correction : float
+        """
+        error = zmp_desired - zmp_measured
+        error_dot = (error - self.prev_error) / dt if dt > 0 else 0.0
+        self.prev_error = error
+        
+        # PD control on ZMP error
+        # Since x_ddot = omega^2 * (x - zmp), adjusting zmp_ref
+        # is equivalent to adjusting com acceleration
+        correction = self.kp * error + self.kd * error_dot
+        
+        return correction
+
+
+class DCMBalanceController:
+    """
+    DCM-based balance controller for push recovery.
+    
+    Adjusts the ZMP to regulate the DCM:
+        p = xi - (1/omega) * (xi_dot_ref + k * (xi - xi_ref))
+    """
+    
+    def __init__(self, z_c=0.80, gravity=9.81, k_dcm=2.0):
+        self.omega = np.sqrt(gravity / z_c)
+        self.k_dcm = k_dcm  # DCM tracking gain (must be > 0)
+    
+    def compute_zmp_reference(self, dcm_current, dcm_desired, dcm_dot_desired):
+        """
+        Compute modified ZMP to track the desired DCM.
+        
+        Parameters
+        ----------
+        dcm_current : float - current DCM position
+        dcm_desired : float - desired DCM position
+        dcm_dot_desired : float - desired DCM velocity
+        
+        Returns
+        -------
+        zmp_ref : float - modified ZMP reference
+        """
+        dcm_error = dcm_current - dcm_desired
+        zmp_ref = dcm_current - (1.0 / self.omega) * (
+            dcm_dot_desired + self.k_dcm * dcm_error
+        )
+        return zmp_ref
+
+
+# Simulate push recovery
+def simulate_push_recovery():
+    """Demonstrate DCM-based push recovery."""
+    omega = np.sqrt(9.81 / 0.80)
+    dt = 0.005
+    duration = 3.0
+    times = np.arange(0, duration, dt)
+    
+    # State: CoM position, velocity
+    x = 0.0
+    x_dot = 0.0
+    
+    # Support foot at origin
+    p_support = 0.0
+    
+    # Push disturbance at t=0.5s
+    push_time = 0.5
+    push_impulse = 0.3  # m/s velocity change
+    
+    controller = DCMBalanceController(z_c=0.80, k_dcm=3.0)
+    
+    x_hist = []
+    dcm_hist = []
+    zmp_hist = []
+    
+    for t in times:
+        # Apply push
+        if abs(t - push_time) < dt:
+            x_dot += push_impulse
+        
+        # Current DCM
+        xi = x + x_dot / omega
+        
+        # Desired DCM = support position (standing still)
+        xi_des = p_support
+        xi_dot_des = 0.0
+        
+        # Controller computes corrective ZMP
+        p_cmd = controller.compute_zmp_reference(xi, xi_des, xi_dot_des)
+        
+        # Clamp ZMP to foot bounds
+        foot_half_length = 0.12
+        p_cmd = np.clip(p_cmd, p_support - foot_half_length,
+                        p_support + foot_half_length)
+        
+        # LIPM dynamics: x_ddot = omega^2 * (x - p)
+        x_ddot = omega**2 * (x - p_cmd)
+        x_dot += x_ddot * dt
+        x += x_dot * dt
+        
+        x_hist.append(x)
+        dcm_hist.append(xi)
+        zmp_hist.append(p_cmd)
+    
+    return times, np.array(x_hist), np.array(dcm_hist), np.array(zmp_hist)
+
+times, x_hist, dcm_hist, zmp_hist = simulate_push_recovery()
+print(f"Push applied at t=0.5s")
+print(f"Max CoM displacement: {np.max(np.abs(x_hist)):.4f} m")
+print(f"Final CoM position: {x_hist[-1]:.6f} m (should be ~0)")
+print(f"Recovery achieved: {np.abs(x_hist[-1]) < 0.01}")
+```
+
+---
+
+## Comparison of Walking Approaches
+
+| Approach | Pros | Cons | Used By |
+|----------|------|------|---------|
+| **ZMP Preview Control** | Well understood, stable | Conservative, flat ground only | HRP, ASIMO |
+| **DCM / Capture Point** | Intuitive, good for push recovery | Still limited dynamics model | Atlas, TALOS |
+| **Whole-Body Control** | Full dynamics, versatile | Computationally expensive | Recent research |
+| **Reinforcement Learning** | Handles complex terrain | Needs massive training, sim-to-real gap | Cassie, Digit |
+| **Central Pattern Generators** | Bio-inspired, rhythmic | Hard to tune, limited adaptation | Early work |
+
+---
+
+## Summary
+
+| Concept | Key Takeaway |
+|---------|-------------|
+| **Gait cycle** | Walking is a periodic alternation of single and double support phases |
+| **ZMP** | The robot is stable when the ZMP stays inside the support polygon |
+| **LIPM** | Simplifies the humanoid to a point mass at constant height, yielding analytical solutions |
+| **DCM** | The point where the robot must step to stop; enables intuitive balance control |
+| **Walking pattern** | Combines footstep planning, CoM trajectory (via LIPM/DCM), and swing foot trajectories |
+| **Balance control** | Real-time adjustment of ZMP/CoM to reject disturbances |
+
+## Exercises
+
+1. **Gait Visualization**: Animate the 2D walking motion showing CoM, ZMP, and swing foot trajectories over a 10-step walk.
+
+2. **LIPM Parameter Study**: Vary the CoM height z_c from 0.5 to 1.2 m and observe how it affects the natural frequency omega and the walking behavior. Plot the results.
+
+3. **Push Recovery**: Extend the push recovery simulation to 2D (x and y). Apply a lateral push and observe how the DCM controller recovers balance.
+
+4. **Footstep Planning**: Implement a footstep planner that can handle turning (curved paths). Generate footsteps for a 90-degree turn.
+
+5. **Swing Trajectory**: Replace the parabolic swing foot trajectory with a cycloid curve. Compare smoothness and ground clearance.
+
+6. **Full Walking Controller**: Combine the footstep planner, DCM trajectory generator, and swing foot planner into a complete walking pattern generator. Simulate 20 steps of forward walking and plot all trajectories.
+
+## Next Steps
+
+Continue to [Manipulation and Grasping](./manipulation-grasping) to learn how humanoid arms and hands interact with objects in the environment.

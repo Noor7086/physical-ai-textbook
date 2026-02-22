@@ -1,0 +1,606 @@
+---
+sidebar_position: 4
+title: "Unity Integration"
+description: "Connecting Unity with ROS 2 for high-fidelity visualization, digital twins, and hybrid simulation using the Unity Robotics Hub and URDF import pipeline"
+---
+
+# Unity Integration for Robotics Simulation
+
+While Gazebo excels at physics simulation and ROS 2 integration, **Unity** brings unmatched visual fidelity, a mature editor workflow, and a vast asset ecosystem. By combining Unity with ROS 2, you can build photorealistic digital twins, generate high-quality synthetic training data, and create interactive interfaces for robot teleoperation. This chapter covers the full integration pipeline.
+
+## Learning Objectives
+
+By the end of this chapter, you will be able to:
+
+1. **Install and configure** the Unity Robotics Hub packages
+2. **Import URDF models** into Unity and configure articulation bodies
+3. **Establish bidirectional communication** between Unity and ROS 2
+4. **Simulate sensors** (cameras, LiDAR, depth) with high visual fidelity in Unity
+5. **Evaluate trade-offs** between Unity and Gazebo for different use cases
+6. **Build a digital twin** that mirrors a physical robot in real time
+
+---
+
+## Architecture Overview
+
+The Unity-ROS 2 integration uses a TCP-based communication layer. Unity acts as a high-fidelity rendering and interaction front end, while ROS 2 handles control, planning, and perception logic.
+
+```
+┌─────────────────────────────────────────────────────┐
+│                   Unity Editor                       │
+│                                                     │
+│  ┌───────────┐  ┌──────────┐  ┌──────────────────┐ │
+│  │ URDF Robot│  │ Sensor   │  │ Environment      │ │
+│  │ Articul-  │  │ Plugins  │  │ (HDRP/URP        │ │
+│  │ ation Body│  │ Camera,  │  │  Lighting, PBR)  │ │
+│  └─────┬─────┘  │ LiDAR    │  └──────────────────┘ │
+│        │        └────┬─────┘                        │
+│        ▼             ▼                              │
+│  ┌──────────────────────────────────────────┐       │
+│  │     ROS-TCP-Connector (C# side)          │       │
+│  └───────────────────┬──────────────────────┘       │
+└──────────────────────┼──────────────────────────────┘
+                       │ TCP Socket
+                       ▼
+┌──────────────────────────────────────────────────────┐
+│  ┌───────────────────────────────────────────┐       │
+│  │  ROS-TCP-Endpoint (Python/C++ ROS 2 node) │       │
+│  └───────────────────┬───────────────────────┘       │
+│                      │                               │
+│     ┌────────────────┼────────────────┐              │
+│     ▼                ▼                ▼              │
+│  /cmd_vel       /joint_states    /camera/image       │
+│  (Twist)        (JointState)     (Image)             │
+│                                                      │
+│                  ROS 2 Ecosystem                     │
+└──────────────────────────────────────────────────────┘
+```
+
+## Setting Up the Unity Robotics Hub
+
+The Unity Robotics Hub is a collection of packages that enable ROS integration, URDF import, and message serialization within Unity.
+
+### Installing Required Packages
+
+In Unity's Package Manager, add these packages via their Git URLs:
+
+```
+# Unity packages (add via Package Manager > Add package from git URL)
+https://github.com/Unity-Technologies/ROS-TCP-Connector.git?path=/com.unity.robotics.ros-tcp-connector
+https://github.com/Unity-Technologies/URDF-Importer.git?path=/com.unity.robotics.urdf-importer
+https://github.com/Unity-Technologies/ROS-TCP-Connector.git?path=/com.unity.robotics.visualizations
+```
+
+On the ROS 2 side, install the TCP endpoint:
+
+```bash
+# Clone and build the ROS 2 TCP endpoint
+cd ~/ros2_ws/src
+git clone https://github.com/Unity-Technologies/ROS-TCP-Endpoint.git -b ROS2v0.7.0
+cd ~/ros2_ws
+colcon build --packages-select ros_tcp_endpoint
+source install/setup.bash
+
+# Launch the endpoint (default port 10000)
+ros2 run ros_tcp_endpoint default_server_endpoint --ros-args -p ROS_IP:=0.0.0.0
+```
+
+### Configuring the Connection
+
+```csharp
+// In Unity: Robotics > ROS Settings
+// Set ROS IP Address: 127.0.0.1 (or your ROS machine IP)
+// Set ROS Port: 10000
+// Protocol: ROS2
+
+// Verify connection programmatically
+using Unity.Robotics.ROSTCPConnector;
+
+public class ConnectionVerifier : MonoBehaviour
+{
+    void Start()
+    {
+        ROSConnection ros = ROSConnection.GetOrCreateInstance();
+        ros.ConnectOnStart = true;
+        Debug.Log($"ROS connection configured: {ros.RosIPAddress}:{ros.RosPort}");
+    }
+}
+```
+
+---
+
+## Importing URDF into Unity
+
+Unity's URDF Importer converts standard URDF files into Unity GameObjects with properly configured joints and collision meshes.
+
+### URDF Import Process
+
+```csharp
+// After importing the URDF Importer package:
+// 1. Place your URDF file and meshes in Assets/URDF/
+// 2. Right-click the .urdf file > Import Robot from URDF
+
+// The importer creates:
+//   - GameObject hierarchy matching the URDF link tree
+//   - ArticulationBody components on each link
+//   - Colliders from URDF collision geometry
+//   - Visual meshes from URDF visual geometry
+
+// Post-import configuration script
+using UnityEngine;
+
+public class URDFPostImport : MonoBehaviour
+{
+    public ArticulationBody rootBody;
+
+    void Start()
+    {
+        // Set solver iterations for stable simulation
+        rootBody = GetComponent<ArticulationBody>();
+        rootBody.solverIterations = 20;
+        rootBody.solverVelocityIterations = 20;
+
+        // Configure all child joints
+        ArticulationBody[] joints = GetComponentsInChildren<ArticulationBody>();
+        foreach (var joint in joints)
+        {
+            if (joint.jointType != ArticulationJointType.FixedJoint)
+            {
+                // Set joint damping and stiffness
+                var drive = joint.xDrive;
+                drive.stiffness = 10000f;
+                drive.damping = 100f;
+                drive.forceLimit = 500f;
+                joint.xDrive = drive;
+            }
+        }
+        Debug.Log($"Configured {joints.Length} articulation bodies");
+    }
+}
+```
+
+### Common URDF Import Issues
+
+| Issue | Symptom | Solution |
+|-------|---------|----------|
+| Missing meshes | Invisible links | Ensure mesh paths in URDF are relative; copy meshes to Assets |
+| Incorrect scale | Giant or tiny robot | Check URDF units (meters); Unity uses meters by default |
+| Unstable joints | Robot explodes on play | Increase solver iterations; add joint damping |
+| Wrong axis | Joints rotate incorrectly | Verify URDF axis definitions match Unity's coordinate system (left-handed Y-up) |
+| Collision overlap | Links interpenetrate | Add collision margin; adjust collision geometry |
+
+---
+
+## ROS 2 Communication from Unity
+
+### Publishing Joint States from Unity to ROS 2
+
+```csharp
+using UnityEngine;
+using Unity.Robotics.ROSTCPConnector;
+using RosMessageTypes.Sensor;
+using RosMessageTypes.Std;
+
+public class JointStatePublisher : MonoBehaviour
+{
+    private ROSConnection ros;
+    private ArticulationBody[] articulationChain;
+    private float publishRate = 50f;  // 50 Hz
+    private float timeSincePublish = 0f;
+
+    private string topicName = "/unity/joint_states";
+
+    void Start()
+    {
+        ros = ROSConnection.GetOrCreateInstance();
+        ros.RegisterPublisher<JointStateMsg>(topicName);
+
+        // Collect all articulation bodies in the robot hierarchy
+        articulationChain = GetComponentsInChildren<ArticulationBody>();
+        Debug.Log($"Publishing {articulationChain.Length} joints on {topicName}");
+    }
+
+    void FixedUpdate()
+    {
+        timeSincePublish += Time.fixedDeltaTime;
+        if (timeSincePublish < 1f / publishRate) return;
+        timeSincePublish = 0f;
+
+        var jointStateMsg = new JointStateMsg();
+        var names = new string[articulationChain.Length];
+        var positions = new double[articulationChain.Length];
+        var velocities = new double[articulationChain.Length];
+        var efforts = new double[articulationChain.Length];
+
+        for (int i = 0; i < articulationChain.Length; i++)
+        {
+            var body = articulationChain[i];
+            names[i] = body.name;
+            positions[i] = body.jointPosition[0] * Mathf.Deg2Rad;
+            velocities[i] = body.jointVelocity[0] * Mathf.Deg2Rad;
+            efforts[i] = body.jointForce[0];
+        }
+
+        jointStateMsg.name = names;
+        jointStateMsg.position = positions;
+        jointStateMsg.velocity = velocities;
+        jointStateMsg.effort = efforts;
+        jointStateMsg.header = new HeaderMsg();
+        jointStateMsg.header.stamp = RosTimeHelper.Now();
+
+        ros.Publish(topicName, jointStateMsg);
+    }
+}
+```
+
+### Subscribing to Velocity Commands from ROS 2
+
+```csharp
+using UnityEngine;
+using Unity.Robotics.ROSTCPConnector;
+using RosMessageTypes.Geometry;
+
+public class CmdVelSubscriber : MonoBehaviour
+{
+    private Vector3 linearVelocity = Vector3.zero;
+    private Vector3 angularVelocity = Vector3.zero;
+    private ArticulationBody robotBase;
+
+    void Start()
+    {
+        robotBase = GetComponent<ArticulationBody>();
+        ROSConnection.GetOrCreateInstance().Subscribe<TwistMsg>(
+            "/cmd_vel", OnCmdVelReceived
+        );
+        Debug.Log("Subscribed to /cmd_vel");
+    }
+
+    void OnCmdVelReceived(TwistMsg msg)
+    {
+        // Convert from ROS (right-hand, Z-up) to Unity (left-hand, Y-up)
+        linearVelocity = new Vector3(
+            (float)msg.linear.x,    // Forward
+            0f,
+            (float)-msg.linear.y    // Lateral (sign flip for handedness)
+        );
+        angularVelocity = new Vector3(
+            0f,
+            (float)-msg.angular.z,  // Yaw rotation
+            0f
+        );
+    }
+
+    void FixedUpdate()
+    {
+        // Apply velocities to the robot base
+        robotBase.velocity = transform.TransformDirection(linearVelocity);
+        robotBase.angularVelocity = transform.TransformDirection(angularVelocity);
+    }
+}
+```
+
+### Python ROS 2 Node Sending Commands to Unity
+
+```python
+import rclpy
+from rclpy.node import Node
+from geometry_msgs.msg import Twist
+from sensor_msgs.msg import JointState
+import math
+
+class UnityRobotController(Node):
+    """ROS 2 node that sends commands to and receives state from Unity."""
+
+    def __init__(self):
+        super().__init__('unity_robot_controller')
+
+        # Publisher for velocity commands
+        self.cmd_pub = self.create_publisher(Twist, '/cmd_vel', 10)
+
+        # Subscriber for joint states from Unity
+        self.joint_sub = self.create_subscription(
+            JointState,
+            '/unity/joint_states',
+            self.joint_state_callback,
+            10
+        )
+
+        # Timer for sending periodic commands
+        self.timer = self.create_timer(0.1, self.send_command)
+        self.time_elapsed = 0.0
+
+        self.get_logger().info('Unity robot controller initialized')
+
+    def joint_state_callback(self, msg):
+        """Process joint states received from Unity."""
+        joint_info = dict(zip(msg.name, msg.position))
+        self.get_logger().info(
+            f'Received {len(msg.name)} joint states from Unity',
+            throttle_duration_sec=2.0
+        )
+
+    def send_command(self):
+        """Send a velocity command to Unity."""
+        cmd = Twist()
+        # Walk forward in a gentle arc
+        cmd.linear.x = 0.3   # 0.3 m/s forward
+        cmd.angular.z = math.sin(self.time_elapsed * 0.5) * 0.2  # Gentle oscillation
+        self.cmd_pub.publish(cmd)
+        self.time_elapsed += 0.1
+
+def main():
+    rclpy.init()
+    node = UnityRobotController()
+    rclpy.spin(node)
+    rclpy.shutdown()
+
+if __name__ == '__main__':
+    main()
+```
+
+---
+
+## Sensor Simulation in Unity
+
+Unity's rendering pipeline can produce high-fidelity sensor data that surpasses Gazebo for vision-based tasks.
+
+### Camera Sensor with HDRP
+
+```csharp
+using UnityEngine;
+using UnityEngine.Rendering.HighDefinition;
+using Unity.Robotics.ROSTCPConnector;
+using RosMessageTypes.Sensor;
+
+public class CameraSensorPublisher : MonoBehaviour
+{
+    public Camera sensorCamera;
+    public int imageWidth = 640;
+    public int imageHeight = 480;
+    public float publishRate = 30f;
+
+    private ROSConnection ros;
+    private RenderTexture renderTexture;
+    private Texture2D outputTexture;
+    private string topicName = "/unity/camera/image_raw";
+    private float timeSincePublish = 0f;
+
+    void Start()
+    {
+        ros = ROSConnection.GetOrCreateInstance();
+        ros.RegisterPublisher<ImageMsg>(topicName);
+
+        // Create render texture matching desired resolution
+        renderTexture = new RenderTexture(imageWidth, imageHeight, 24);
+        renderTexture.format = RenderTextureFormat.ARGB32;
+        sensorCamera.targetTexture = renderTexture;
+
+        outputTexture = new Texture2D(imageWidth, imageHeight, TextureFormat.RGB24, false);
+    }
+
+    void Update()
+    {
+        timeSincePublish += Time.deltaTime;
+        if (timeSincePublish < 1f / publishRate) return;
+        timeSincePublish = 0f;
+
+        // Capture the camera render
+        RenderTexture.active = renderTexture;
+        outputTexture.ReadPixels(new Rect(0, 0, imageWidth, imageHeight), 0, 0);
+        outputTexture.Apply();
+        RenderTexture.active = null;
+
+        // Convert to ROS Image message
+        byte[] imageData = outputTexture.GetRawTextureData();
+        var imageMsg = new ImageMsg
+        {
+            height = (uint)imageHeight,
+            width = (uint)imageWidth,
+            encoding = "rgb8",
+            step = (uint)(imageWidth * 3),
+            data = imageData
+        };
+
+        ros.Publish(topicName, imageMsg);
+    }
+}
+```
+
+### Simulated LiDAR via Raycasting
+
+```csharp
+using UnityEngine;
+using Unity.Robotics.ROSTCPConnector;
+using RosMessageTypes.Sensor;
+using System.Collections.Generic;
+
+public class LiDARSimulator : MonoBehaviour
+{
+    public int horizontalRays = 720;
+    public float minAngle = -135f;
+    public float maxAngle = 135f;
+    public float maxRange = 25f;
+    public float minRange = 0.08f;
+    public float scanRate = 10f;
+    public float noiseStddev = 0.01f;
+
+    private ROSConnection ros;
+    private string topicName = "/unity/scan";
+    private float timeSincePublish = 0f;
+
+    void Start()
+    {
+        ros = ROSConnection.GetOrCreateInstance();
+        ros.RegisterPublisher<LaserScanMsg>(topicName);
+    }
+
+    void FixedUpdate()
+    {
+        timeSincePublish += Time.fixedDeltaTime;
+        if (timeSincePublish < 1f / scanRate) return;
+        timeSincePublish = 0f;
+
+        float angleRange = maxAngle - minAngle;
+        float angleIncrement = angleRange / (horizontalRays - 1);
+        float[] ranges = new float[horizontalRays];
+        float[] intensities = new float[horizontalRays];
+
+        for (int i = 0; i < horizontalRays; i++)
+        {
+            float angle = minAngle + i * angleIncrement;
+            Vector3 direction = Quaternion.Euler(0, angle, 0) * transform.forward;
+
+            if (Physics.Raycast(transform.position, direction, out RaycastHit hit, maxRange))
+            {
+                float noise = Random.Range(-noiseStddev, noiseStddev);
+                float distance = hit.distance + noise;
+                ranges[i] = Mathf.Clamp(distance, minRange, maxRange);
+                intensities[i] = 1.0f;
+            }
+            else
+            {
+                ranges[i] = maxRange;
+                intensities[i] = 0.0f;
+            }
+        }
+
+        var scanMsg = new LaserScanMsg
+        {
+            angle_min = minAngle * Mathf.Deg2Rad,
+            angle_max = maxAngle * Mathf.Deg2Rad,
+            angle_increment = angleIncrement * Mathf.Deg2Rad,
+            range_min = minRange,
+            range_max = maxRange,
+            ranges = ranges,
+            intensities = intensities
+        };
+
+        ros.Publish(topicName, scanMsg);
+    }
+}
+```
+
+---
+
+## Unity vs Gazebo: When to Use Each
+
+| Criterion | Gazebo | Unity |
+|-----------|--------|-------|
+| **Physics accuracy** | High (DART, Bullet, custom) | Good (PhysX, configurable) |
+| **Visual fidelity** | Basic to moderate | Photorealistic (HDRP, ray tracing) |
+| **ROS integration** | Native, first-class | Via TCP bridge (slight latency) |
+| **Sensor noise models** | Built-in, configurable per axis | Manual implementation required |
+| **Synthetic data** | Limited rendering quality | Excellent for vision ML training |
+| **Asset ecosystem** | Robotics-focused models | Massive (Unity Asset Store) |
+| **Editor workflow** | XML/SDF-based | Visual drag-and-drop editor |
+| **Real-time performance** | Good for physics | Excellent with GPU rendering |
+| **Best for** | Control, dynamics, SLAM | Vision, digital twins, HRI |
+
+### Decision Guide
+
+```
+Choose Gazebo when:
+  - Physics accuracy is the top priority
+  - You need native ROS 2 topic/service/action support
+  - Your focus is control algorithm development
+  - You need validated sensor noise models
+
+Choose Unity when:
+  - Visual realism matters (synthetic data, digital twin)
+  - You need photorealistic camera/depth simulation
+  - Human-robot interaction visualization is important
+  - You want to leverage existing 3D assets
+  - You are building a teleoperation or monitoring UI
+
+Choose both (hybrid) when:
+  - Gazebo runs the physics and control loop
+  - Unity renders the visualization and captures images
+  - They communicate via ROS 2 topics through the bridge
+```
+
+---
+
+## Building a Digital Twin
+
+A digital twin mirrors the physical robot's state in Unity in real time, enabling remote monitoring and visualization.
+
+```python
+import rclpy
+from rclpy.node import Node
+from sensor_msgs.msg import JointState
+from geometry_msgs.msg import PoseStamped
+
+class DigitalTwinBridge(Node):
+    """Relays physical robot state to Unity for digital twin visualization."""
+
+    def __init__(self):
+        super().__init__('digital_twin_bridge')
+
+        # Subscribe to the real robot's joint states
+        self.real_joint_sub = self.create_subscription(
+            JointState, '/robot/joint_states',
+            self.on_real_joint_states, 10
+        )
+
+        # Republish on a topic that Unity listens to
+        self.unity_joint_pub = self.create_publisher(
+            JointState, '/unity/target_joint_states', 10
+        )
+
+        # Subscribe to the real robot's base pose
+        self.real_pose_sub = self.create_subscription(
+            PoseStamped, '/robot/base_pose',
+            self.on_real_pose, 10
+        )
+        self.unity_pose_pub = self.create_publisher(
+            PoseStamped, '/unity/target_base_pose', 10
+        )
+
+        self.get_logger().info('Digital twin bridge active')
+
+    def on_real_joint_states(self, msg):
+        """Forward real joint states to Unity."""
+        self.unity_joint_pub.publish(msg)
+
+    def on_real_pose(self, msg):
+        """Forward real base pose to Unity."""
+        self.unity_pose_pub.publish(msg)
+
+def main():
+    rclpy.init()
+    node = DigitalTwinBridge()
+    rclpy.spin(node)
+    rclpy.shutdown()
+
+if __name__ == '__main__':
+    main()
+```
+
+---
+
+## Summary
+
+| Concept | Key Takeaway |
+|---------|-------------|
+| **Unity Robotics Hub** | A set of packages providing URDF import and ROS 2 TCP communication |
+| **ROS-TCP-Connector** | Bidirectional bridge between Unity C# scripts and ROS 2 topics |
+| **URDF Import** | Converts URDF to Unity ArticulationBody hierarchy with joints and colliders |
+| **Sensor simulation** | Unity cameras and raycasting produce high-fidelity sensor data via HDRP |
+| **Unity vs Gazebo** | Gazebo excels at physics and ROS integration; Unity excels at visuals and assets |
+| **Digital twin** | Real-time mirroring of a physical robot in Unity via ROS 2 joint state relay |
+
+## Exercises
+
+1. **URDF Import**: Import a humanoid URDF into Unity, configure the ArticulationBody joints, and verify that all links and joints match the original model.
+
+2. **Bidirectional Control**: Set up a ROS 2 node that sends joint position commands to Unity and receives the resulting joint states back. Verify the round-trip latency.
+
+3. **Camera Comparison**: Place identical objects in both Gazebo and Unity. Capture RGB and depth images from both simulators and compare visual quality and noise characteristics.
+
+4. **Digital Twin**: Build a digital twin that mirrors a simulated Gazebo robot in Unity. Use ROS 2 topics to synchronize joint states at 50 Hz.
+
+5. **Hybrid Simulation**: Run physics in Gazebo and visualization in Unity simultaneously. Command the robot to walk in Gazebo and observe the motion in Unity's HDRP-rendered environment.
+
+## Next Steps
+
+Continue to [NVIDIA Isaac Sim Overview](/nvidia-isaac-platform/isaac-sim) to explore GPU-accelerated simulation with photorealistic rendering and massive parallelism for training robot policies.

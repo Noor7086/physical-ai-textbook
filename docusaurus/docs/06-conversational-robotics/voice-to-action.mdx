@@ -1,0 +1,1286 @@
+---
+sidebar_position: 3
+title: "Voice-to-Action: From Speech to Robot Commands"
+description: "Building NLU pipelines that convert spoken language into structured robot actions using intent recognition, LLM-based parsing, and safety-constrained action planning"
+---
+
+# Voice-to-Action: From Speech to Robot Commands
+
+A robot that can transcribe speech is only halfway there. The real challenge is **understanding** what the human wants and translating that understanding into a safe, executable sequence of physical actions. This chapter covers the complete pipeline from transcribed text to robot motion -- the Natural Language Understanding (NLU) layer that gives meaning to words.
+
+## Learning Objectives
+
+By the end of this chapter, you will be able to:
+
+1. **Design** an NLU pipeline with intent recognition and slot filling
+2. **Implement** rule-based and ML-based intent classifiers for robot commands
+3. **Use** Large Language Models (LLMs) to parse complex, open-ended instructions into structured action representations
+4. **Build** an action planner that maps parsed commands to robot capabilities
+5. **Enforce** safety constraints that validate every command before execution
+6. **Integrate** the voice-to-action pipeline as a ROS 2 node
+
+## The NLU Pipeline
+
+Natural Language Understanding for robotics follows a structured pipeline that progressively transforms raw text into executable actions:
+
+```
+┌────────────┐    ┌────────────┐    ┌────────────┐    ┌────────────┐    ┌────────────┐
+│  Raw Text  │───▶│  Intent    │───▶│   Slot     │───▶│  Action    │───▶│  Safety    │
+│  from ASR  │    │  Classifi- │    │  Filling & │    │  Planning  │    │  Validation│
+│            │    │  cation    │    │  Entity    │    │            │    │  & Dispatch│
+│            │    │            │    │  Extraction│    │            │    │            │
+└────────────┘    └────────────┘    └────────────┘    └────────────┘    └────────────┘
+```
+
+### Example Walkthrough
+
+Consider the command: **"Pick up the red cup from the kitchen table and bring it to the living room."**
+
+| Stage | Output |
+|-------|--------|
+| **ASR** | `"Pick up the red cup from the kitchen table and bring it to the living room."` |
+| **Intent** | `PICK_AND_PLACE` |
+| **Slots** | `object: "red cup"`, `source: "kitchen table"`, `destination: "living room"` |
+| **Action Plan** | `navigate(kitchen_table) -> grasp(red_cup) -> navigate(living_room) -> release(red_cup)` |
+| **Safety** | Validate: object graspable, path clear, weight within limit |
+
+## Intent Recognition
+
+**Intent recognition** classifies a user's utterance into one of a predefined set of action categories. For robotics, the intent vocabulary is typically smaller and more structured than general-purpose assistants.
+
+### Defining Robot Intents
+
+```python
+from enum import Enum
+from dataclasses import dataclass, field
+from typing import Optional
+
+class RobotIntent(Enum):
+    """Intents that a conversational robot can handle."""
+    
+    # Manipulation intents
+    PICK_UP = "pick_up"
+    PLACE = "place"
+    PICK_AND_PLACE = "pick_and_place"
+    HAND_OVER = "hand_over"
+    PUSH = "push"
+    POUR = "pour"
+    
+    # Navigation intents
+    GO_TO = "go_to"
+    FOLLOW = "follow"
+    COME_HERE = "come_here"
+    STOP = "stop"
+    
+    # Perception intents
+    LOOK_AT = "look_at"
+    FIND = "find"
+    DESCRIBE_SCENE = "describe_scene"
+    IDENTIFY_OBJECT = "identify_object"
+    
+    # Communication intents
+    GREET = "greet"
+    CONFIRM = "confirm"
+    DENY = "deny"
+    ASK_HELP = "ask_help"
+    
+    # System intents
+    CANCEL = "cancel"
+    REPEAT = "repeat"
+    STATUS = "status"
+    EMERGENCY_STOP = "emergency_stop"
+    
+    # Fallback
+    UNKNOWN = "unknown"
+
+
+@dataclass
+class ParsedCommand:
+    """Structured representation of a parsed voice command."""
+    
+    intent: RobotIntent
+    confidence: float
+    raw_text: str
+    
+    # Extracted slots
+    object_name: Optional[str] = None
+    object_color: Optional[str] = None
+    object_size: Optional[str] = None
+    location_source: Optional[str] = None
+    location_target: Optional[str] = None
+    person: Optional[str] = None
+    quantity: Optional[int] = None
+    
+    # Additional context
+    is_urgent: bool = False
+    requires_confirmation: bool = False
+    sub_commands: list = field(default_factory=list)
+```
+
+### Rule-Based Intent Classifier
+
+For well-defined robot commands, a rule-based classifier is fast, predictable, and easy to debug:
+
+```python
+import re
+from typing import Tuple
+
+class RuleBasedIntentClassifier:
+    """
+    Fast, deterministic intent classifier using pattern matching.
+    
+    Suitable for well-defined command vocabularies where
+    predictability is more important than flexibility.
+    """
+    
+    def __init__(self):
+        # Patterns ordered by priority (first match wins)
+        self.patterns = [
+            # Emergency -- highest priority
+            (r"\b(stop|halt|freeze|emergency)\b", RobotIntent.EMERGENCY_STOP, 0.95),
+            (r"\bcancel\b", RobotIntent.CANCEL, 0.90),
+            
+            # Manipulation
+            (r"\bpick\s+up\b.*\b(bring|take|put|place)\b",
+             RobotIntent.PICK_AND_PLACE, 0.85),
+            (r"\b(pick\s+up|grab|grasp|get)\b", RobotIntent.PICK_UP, 0.85),
+            (r"\b(put\s+down|place|set\s+down|drop)\b", RobotIntent.PLACE, 0.85),
+            (r"\b(hand|give|pass)\b.*\b(me|him|her|them)\b",
+             RobotIntent.HAND_OVER, 0.80),
+            (r"\bpush\b", RobotIntent.PUSH, 0.80),
+            (r"\bpour\b", RobotIntent.POUR, 0.80),
+            
+            # Navigation
+            (r"\b(go\s+to|move\s+to|navigate\s+to|head\s+to)\b",
+             RobotIntent.GO_TO, 0.85),
+            (r"\b(follow|come\s+with)\b", RobotIntent.FOLLOW, 0.85),
+            (r"\bcome\s+(here|to\s+me|over)\b", RobotIntent.COME_HERE, 0.85),
+            
+            # Perception
+            (r"\b(look\s+at|turn\s+to|face)\b", RobotIntent.LOOK_AT, 0.80),
+            (r"\b(find|locate|search\s+for|where\s+is)\b",
+             RobotIntent.FIND, 0.80),
+            (r"\b(describe|what\s+do\s+you\s+see|tell\s+me\s+what)\b",
+             RobotIntent.DESCRIBE_SCENE, 0.80),
+            (r"\b(what\s+is\s+this|identify|recognize)\b",
+             RobotIntent.IDENTIFY_OBJECT, 0.80),
+            
+            # Communication
+            (r"\b(hello|hi|hey|greetings)\b", RobotIntent.GREET, 0.70),
+            (r"\b(yes|yeah|correct|right|affirmative)\b",
+             RobotIntent.CONFIRM, 0.75),
+            (r"\b(no|nope|wrong|negative)\b", RobotIntent.DENY, 0.75),
+            (r"\b(help|assist|can\s+you)\b", RobotIntent.ASK_HELP, 0.70),
+            
+            # Status
+            (r"\b(status|what\s+are\s+you\s+doing|progress)\b",
+             RobotIntent.STATUS, 0.80),
+            (r"\b(repeat|say\s+again|what\s+did)\b",
+             RobotIntent.REPEAT, 0.80),
+        ]
+    
+    def classify(self, text: str) -> Tuple[RobotIntent, float]:
+        """
+        Classify text into a robot intent.
+        
+        Args:
+            text: Transcribed speech text
+        
+        Returns:
+            Tuple of (intent, confidence)
+        """
+        text_lower = text.lower().strip()
+        
+        for pattern, intent, confidence in self.patterns:
+            if re.search(pattern, text_lower):
+                return intent, confidence
+        
+        return RobotIntent.UNKNOWN, 0.0
+
+
+# Usage
+classifier = RuleBasedIntentClassifier()
+
+test_commands = [
+    "Pick up the red cup and bring it to me",
+    "Go to the kitchen",
+    "What do you see on the table?",
+    "Stop immediately!",
+    "Find my glasses",
+]
+
+for cmd in test_commands:
+    intent, conf = classifier.classify(cmd)
+    print(f"  '{cmd}' -> {intent.value} ({conf:.0%})")
+```
+
+### ML-Based Intent Classifier
+
+For more flexible understanding, a fine-tuned transformer model handles paraphrases and novel phrasings:
+
+```python
+from transformers import pipeline
+from typing import List, Tuple
+import json
+
+class TransformerIntentClassifier:
+    """
+    Intent classifier using a zero-shot or fine-tuned transformer.
+    
+    Uses Hugging Face zero-shot classification as a starting point,
+    which can be replaced with a fine-tuned model for production.
+    """
+    
+    def __init__(self, model_name: str = "facebook/bart-large-mnli"):
+        self.classifier = pipeline(
+            "zero-shot-classification",
+            model=model_name,
+            device=0,  # GPU
+        )
+        
+        # Define candidate labels matching our intent vocabulary
+        self.intent_labels = {
+            "picking up an object": RobotIntent.PICK_UP,
+            "placing an object": RobotIntent.PLACE,
+            "picking up and moving an object": RobotIntent.PICK_AND_PLACE,
+            "handing something to a person": RobotIntent.HAND_OVER,
+            "navigating to a location": RobotIntent.GO_TO,
+            "following a person": RobotIntent.FOLLOW,
+            "coming to the speaker": RobotIntent.COME_HERE,
+            "stopping all movement": RobotIntent.EMERGENCY_STOP,
+            "looking at something": RobotIntent.LOOK_AT,
+            "finding or searching for an object": RobotIntent.FIND,
+            "describing what is visible": RobotIntent.DESCRIBE_SCENE,
+            "greeting or small talk": RobotIntent.GREET,
+            "confirming or agreeing": RobotIntent.CONFIRM,
+            "denying or disagreeing": RobotIntent.DENY,
+        }
+    
+    def classify(self, text: str, top_k: int = 3) -> List[Tuple[RobotIntent, float]]:
+        """
+        Classify text into robot intents with confidence scores.
+        
+        Args:
+            text: Input text from ASR
+            top_k: Number of top predictions to return
+        
+        Returns:
+            List of (intent, confidence) tuples, sorted by confidence
+        """
+        candidate_labels = list(self.intent_labels.keys())
+        
+        result = self.classifier(
+            text,
+            candidate_labels=candidate_labels,
+            multi_label=False,
+        )
+        
+        predictions = []
+        for label, score in zip(result["labels"][:top_k], result["scores"][:top_k]):
+            intent = self.intent_labels[label]
+            predictions.append((intent, score))
+        
+        return predictions
+
+
+# Usage
+classifier = TransformerIntentClassifier()
+results = classifier.classify("Could you grab that bottle and bring it over here?")
+for intent, score in results:
+    print(f"  {intent.value}: {score:.2%}")
+```
+
+## Slot Filling and Entity Extraction
+
+After determining the intent, we need to extract the **slots** -- the parameters that specify *what* to act on, *where*, and *how*.
+
+```python
+import re
+from typing import Dict, Optional
+
+class SlotExtractor:
+    """
+    Extract structured slots from natural language commands.
+    
+    Combines regex patterns for common slot types with
+    fallback heuristics for ambiguous references.
+    """
+    
+    # Common color words
+    COLORS = {
+        "red", "blue", "green", "yellow", "orange", "purple",
+        "black", "white", "brown", "pink", "gray", "grey",
+    }
+    
+    # Common size modifiers
+    SIZES = {"big", "large", "small", "tiny", "medium", "huge", "little"}
+    
+    # Known locations in a typical environment
+    LOCATIONS = {
+        "kitchen", "living room", "bedroom", "bathroom", "garage",
+        "table", "counter", "shelf", "floor", "desk", "chair",
+        "kitchen table", "dining table", "coffee table", "nightstand",
+        "couch", "sofa", "bed", "sink", "stove", "refrigerator",
+    }
+    
+    def extract(self, text: str, intent: RobotIntent) -> Dict[str, Optional[str]]:
+        """
+        Extract slots relevant to the given intent.
+        
+        Args:
+            text: Raw command text
+            intent: Classified intent
+        
+        Returns:
+            Dictionary of slot names to extracted values
+        """
+        text_lower = text.lower()
+        slots = {}
+        
+        # Extract color
+        for color in self.COLORS:
+            if color in text_lower:
+                slots["object_color"] = color
+                break
+        
+        # Extract size
+        for size in self.SIZES:
+            if size in text_lower:
+                slots["object_size"] = size
+                break
+        
+        # Extract locations based on intent
+        if intent in (RobotIntent.PICK_AND_PLACE, RobotIntent.PLACE):
+            slots.update(self._extract_source_destination(text_lower))
+        elif intent in (RobotIntent.GO_TO, RobotIntent.NAVIGATE_TO
+                        if hasattr(RobotIntent, 'NAVIGATE_TO') else ()):
+            slots["location_target"] = self._extract_single_location(text_lower)
+        
+        # Extract object name
+        slots["object_name"] = self._extract_object(text_lower, slots)
+        
+        # Extract person reference
+        person = self._extract_person(text_lower)
+        if person:
+            slots["person"] = person
+        
+        return slots
+    
+    def _extract_source_destination(self, text: str) -> Dict[str, str]:
+        """Extract source and destination locations."""
+        result = {}
+        
+        # Pattern: "from X to Y" or "from X ... to Y"
+        match = re.search(
+            r"from\s+(?:the\s+)?(.+?)\s+(?:and\s+)?(?:bring|take|put|place|move)\s+"
+            r"(?:it\s+)?(?:to|on|in|at)\s+(?:the\s+)?(.+?)(?:\.|$)",
+            text
+        )
+        if match:
+            result["location_source"] = match.group(1).strip()
+            result["location_target"] = match.group(2).strip()
+            return result
+        
+        # Pattern: "put/place X on/in/at Y"
+        match = re.search(
+            r"(?:put|place|set|drop)\s+(?:it\s+)?(?:on|in|at|onto)\s+(?:the\s+)?(.+?)(?:\.|$)",
+            text
+        )
+        if match:
+            result["location_target"] = match.group(1).strip()
+        
+        # Pattern: "from the X" (source only)
+        match = re.search(r"from\s+(?:the\s+)?(.+?)(?:\s+and|\s+then|\.|$)", text)
+        if match:
+            result["location_source"] = match.group(1).strip()
+        
+        # Pattern: "to the X" or "bring it to X"
+        match = re.search(
+            r"(?:to|into|onto)\s+(?:the\s+)?(.+?)(?:\.|$)", text
+        )
+        if match and "location_target" not in result:
+            result["location_target"] = match.group(1).strip()
+        
+        return result
+    
+    def _extract_single_location(self, text: str) -> Optional[str]:
+        """Extract a single location reference."""
+        for location in sorted(self.LOCATIONS, key=len, reverse=True):
+            if location in text:
+                return location
+        
+        match = re.search(
+            r"(?:to|toward|towards)\s+(?:the\s+)?(.+?)(?:\.|$)", text
+        )
+        return match.group(1).strip() if match else None
+    
+    def _extract_object(self, text: str, existing_slots: dict) -> Optional[str]:
+        """Extract the target object, using color and size as modifiers."""
+        # Common patterns for object references
+        patterns = [
+            r"(?:pick\s+up|grab|get|grasp|take)\s+(?:the\s+|a\s+)?(.+?)(?:\s+from|\s+on|\s+and|\.|$)",
+            r"(?:find|locate|search\s+for)\s+(?:the\s+|a\s+|my\s+)?(.+?)(?:\s+in|\s+on|\.|$)",
+            r"(?:hand|give|pass)\s+(?:me\s+)?(?:the\s+|a\s+)?(.+?)(?:\.|$)",
+        ]
+        
+        for pattern in patterns:
+            match = re.search(pattern, text)
+            if match:
+                obj = match.group(1).strip()
+                # Remove trailing prepositions
+                obj = re.sub(r"\s+(to|from|on|in|at|and|then)$", "", obj)
+                return obj
+        
+        return None
+    
+    def _extract_person(self, text: str) -> Optional[str]:
+        """Extract person references."""
+        if re.search(r"\bme\b", text):
+            return "speaker"
+        
+        match = re.search(r"\b(him|her|them|john|sarah|the\s+person)\b", text)
+        return match.group(1) if match else None
+
+
+# Usage
+extractor = SlotExtractor()
+slots = extractor.extract(
+    "Pick up the red cup from the kitchen table and bring it to me",
+    RobotIntent.PICK_AND_PLACE
+)
+print(json.dumps(slots, indent=2))
+# {
+#   "object_color": "red",
+#   "object_name": "red cup",
+#   "location_source": "kitchen table",
+#   "person": "speaker"
+# }
+```
+
+## LLM-Based Command Parsing
+
+For complex, open-ended instructions, Large Language Models provide far more flexible parsing than rule-based systems. The key is to use **structured output** -- constraining the LLM to produce a well-defined JSON schema:
+
+```python
+import json
+from openai import OpenAI
+from typing import Optional
+from dataclasses import asdict
+
+class LLMCommandParser:
+    """
+    Parse natural language robot commands using an LLM.
+    
+    Uses structured output prompting to extract intents,
+    slots, and action sequences from complex instructions.
+    """
+    
+    SYSTEM_PROMPT = """You are a robot command parser. Your job is to convert 
+natural language instructions into structured JSON commands that a robot can execute.
+
+The robot has these capabilities:
+- navigate(location): Move to a named location
+- pick_up(object): Grasp an object
+- place(object, location): Place an object at a location
+- hand_over(object, person): Give an object to a person
+- look_at(target): Turn head/camera toward a target
+- find(object): Search for an object in the environment
+- describe(): Describe current scene
+- stop(): Emergency stop
+
+Output MUST be valid JSON with this schema:
+{
+    "intent": "one of: pick_up, place, pick_and_place, hand_over, go_to, 
+               follow, find, look_at, describe_scene, stop, unknown",
+    "confidence": 0.0 to 1.0,
+    "action_sequence": [
+        {"action": "action_name", "params": {"key": "value"}}
+    ],
+    "slots": {
+        "object": "object description or null",
+        "color": "color or null",
+        "source_location": "location or null",
+        "target_location": "location or null",
+        "person": "person reference or null"
+    },
+    "requires_clarification": false,
+    "clarification_question": "question to ask if clarification needed",
+    "safety_notes": ["any safety concerns"]
+}
+
+Be precise. If the command is ambiguous, set requires_clarification to true 
+and provide a specific clarification question."""
+
+    def __init__(self, model: str = "gpt-4o-mini", api_base: Optional[str] = None):
+        """
+        Initialize the LLM command parser.
+        
+        Args:
+            model: LLM model identifier
+            api_base: Optional API base URL (for local models like Ollama)
+        """
+        kwargs = {}
+        if api_base:
+            kwargs["base_url"] = api_base
+        self.client = OpenAI(**kwargs)
+        self.model = model
+    
+    def parse(self, text: str, context: Optional[dict] = None) -> dict:
+        """
+        Parse a natural language command into structured action.
+        
+        Args:
+            text: Transcribed speech command
+            context: Optional context (current location, visible objects, etc.)
+        
+        Returns:
+            Structured command dictionary
+        """
+        user_message = f"Command: \"{text}\""
+        
+        if context:
+            user_message += f"\n\nCurrent context:\n"
+            if "location" in context:
+                user_message += f"- Robot is at: {context['location']}\n"
+            if "visible_objects" in context:
+                objects = ", ".join(context["visible_objects"])
+                user_message += f"- Visible objects: {objects}\n"
+            if "nearby_people" in context:
+                people = ", ".join(context["nearby_people"])
+                user_message += f"- Nearby people: {people}\n"
+        
+        response = self.client.chat.completions.create(
+            model=self.model,
+            messages=[
+                {"role": "system", "content": self.SYSTEM_PROMPT},
+                {"role": "user", "content": user_message},
+            ],
+            temperature=0.0,
+            response_format={"type": "json_object"},
+        )
+        
+        result = json.loads(response.choices[0].message.content)
+        return result
+
+
+# Usage
+parser = LLMCommandParser()
+
+# Simple command
+result = parser.parse("Pick up the red cup and put it on the shelf")
+print(json.dumps(result, indent=2))
+
+# Ambiguous command with context
+result = parser.parse(
+    "Grab that and bring it here",
+    context={
+        "location": "kitchen",
+        "visible_objects": ["red mug", "blue plate", "green bottle"],
+        "nearby_people": ["user_1"],
+    }
+)
+print(json.dumps(result, indent=2))
+# Output includes requires_clarification: true
+# clarification_question: "I can see a red mug, blue plate, and green bottle. 
+#                          Which object would you like me to grab?"
+```
+
+### Using Local LLMs for Privacy and Latency
+
+For robots operating in sensitive environments or without internet access, local LLMs are essential:
+
+```python
+class LocalLLMCommandParser(LLMCommandParser):
+    """
+    Command parser using a locally-hosted LLM via Ollama.
+    
+    Provides the same interface as the cloud parser but runs
+    entirely on the robot's onboard compute.
+    """
+    
+    def __init__(self, model: str = "llama3.1:8b"):
+        super().__init__(
+            model=model,
+            api_base="http://localhost:11434/v1",
+        )
+
+
+# Usage with local Ollama instance
+local_parser = LocalLLMCommandParser(model="llama3.1:8b")
+result = local_parser.parse("Go to the kitchen and find the scissors")
+```
+
+## Action Planning from Natural Language
+
+Once we have a structured command, the **action planner** maps it to a sequence of executable robot primitives:
+
+```python
+from dataclasses import dataclass
+from typing import List, Optional, Callable
+from enum import Enum
+
+class ActionStatus(Enum):
+    PENDING = "pending"
+    EXECUTING = "executing"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
+@dataclass
+class RobotAction:
+    """A single executable robot action."""
+    name: str
+    params: dict
+    preconditions: List[str]
+    postconditions: List[str]
+    timeout_seconds: float = 30.0
+    status: ActionStatus = ActionStatus.PENDING
+    error_message: Optional[str] = None
+
+
+class ActionPlanner:
+    """
+    Plan and sequence robot actions from parsed commands.
+    
+    Converts high-level parsed commands into ordered sequences
+    of primitive actions with preconditions and postconditions.
+    """
+    
+    def __init__(self, robot_capabilities: dict):
+        """
+        Args:
+            robot_capabilities: Dict of capability_name -> metadata
+                e.g., {"max_reach": 0.8, "graspable_sizes": (0.02, 0.15)}
+        """
+        self.capabilities = robot_capabilities
+        
+        # Action templates: intent -> action sequence builder
+        self.action_templates = {
+            "pick_up": self._plan_pick_up,
+            "place": self._plan_place,
+            "pick_and_place": self._plan_pick_and_place,
+            "hand_over": self._plan_hand_over,
+            "go_to": self._plan_navigate,
+            "find": self._plan_find,
+            "look_at": self._plan_look_at,
+            "describe_scene": self._plan_describe,
+            "stop": self._plan_stop,
+        }
+    
+    def plan(self, parsed_command: dict) -> List[RobotAction]:
+        """
+        Generate an action plan from a parsed command.
+        
+        Args:
+            parsed_command: Structured command from NLU
+        
+        Returns:
+            Ordered list of RobotAction instances
+        """
+        intent = parsed_command["intent"]
+        
+        # Check if we have a template for this intent
+        if intent not in self.action_templates:
+            return [RobotAction(
+                name="report_error",
+                params={"message": f"Unknown intent: {intent}"},
+                preconditions=[],
+                postconditions=[],
+            )]
+        
+        # Use the action sequence from LLM if available
+        if "action_sequence" in parsed_command:
+            return self._from_llm_sequence(parsed_command["action_sequence"])
+        
+        # Fall back to template-based planning
+        planner_fn = self.action_templates[intent]
+        return planner_fn(parsed_command.get("slots", {}))
+    
+    def _plan_pick_up(self, slots: dict) -> List[RobotAction]:
+        """Plan a pick-up action sequence."""
+        obj = slots.get("object", "unknown_object")
+        
+        return [
+            RobotAction(
+                name="locate_object",
+                params={"object_description": obj},
+                preconditions=["camera_active"],
+                postconditions=["object_position_known"],
+                timeout_seconds=10.0,
+            ),
+            RobotAction(
+                name="approach_object",
+                params={"object_description": obj},
+                preconditions=["object_position_known"],
+                postconditions=["object_in_reach"],
+                timeout_seconds=15.0,
+            ),
+            RobotAction(
+                name="open_gripper",
+                params={"width": self.capabilities.get("gripper_max_width", 0.10)},
+                preconditions=["object_in_reach"],
+                postconditions=["gripper_open"],
+                timeout_seconds=3.0,
+            ),
+            RobotAction(
+                name="grasp",
+                params={"object_description": obj, "force": 5.0},
+                preconditions=["gripper_open", "object_in_reach"],
+                postconditions=["object_grasped"],
+                timeout_seconds=10.0,
+            ),
+            RobotAction(
+                name="lift",
+                params={"height": 0.15},
+                preconditions=["object_grasped"],
+                postconditions=["object_lifted"],
+                timeout_seconds=5.0,
+            ),
+        ]
+    
+    def _plan_pick_and_place(self, slots: dict) -> List[RobotAction]:
+        """Plan a complete pick-and-place sequence."""
+        obj = slots.get("object", "unknown_object")
+        source = slots.get("source_location")
+        target = slots.get("target_location", "default_place_position")
+        
+        actions = []
+        
+        # Navigate to source if specified
+        if source:
+            actions.append(RobotAction(
+                name="navigate",
+                params={"destination": source},
+                preconditions=[],
+                postconditions=["at_source"],
+                timeout_seconds=60.0,
+            ))
+        
+        # Pick up
+        actions.extend(self._plan_pick_up(slots))
+        
+        # Navigate to target
+        actions.append(RobotAction(
+            name="navigate",
+            params={"destination": target},
+            preconditions=["object_grasped"],
+            postconditions=["at_target"],
+            timeout_seconds=60.0,
+        ))
+        
+        # Place
+        actions.extend([
+            RobotAction(
+                name="move_to_place_position",
+                params={"location": target, "height": 0.10},
+                preconditions=["at_target", "object_grasped"],
+                postconditions=["at_place_position"],
+                timeout_seconds=10.0,
+            ),
+            RobotAction(
+                name="open_gripper",
+                params={"width": 0.10},
+                preconditions=["at_place_position"],
+                postconditions=["object_released"],
+                timeout_seconds=3.0,
+            ),
+            RobotAction(
+                name="retract_arm",
+                params={"safe_position": True},
+                preconditions=["object_released"],
+                postconditions=["arm_retracted"],
+                timeout_seconds=5.0,
+            ),
+        ])
+        
+        return actions
+    
+    def _plan_navigate(self, slots: dict) -> List[RobotAction]:
+        target = slots.get("target_location", "unknown")
+        return [RobotAction(
+            name="navigate",
+            params={"destination": target},
+            preconditions=[],
+            postconditions=["at_destination"],
+            timeout_seconds=120.0,
+        )]
+    
+    def _plan_find(self, slots: dict) -> List[RobotAction]:
+        obj = slots.get("object", "unknown_object")
+        return [
+            RobotAction(
+                name="scan_environment",
+                params={"target": obj, "rotation_degrees": 360},
+                preconditions=["camera_active"],
+                postconditions=["scan_complete"],
+                timeout_seconds=30.0,
+            ),
+            RobotAction(
+                name="report_findings",
+                params={"target": obj},
+                preconditions=["scan_complete"],
+                postconditions=["findings_reported"],
+                timeout_seconds=5.0,
+            ),
+        ]
+    
+    def _plan_look_at(self, slots: dict) -> List[RobotAction]:
+        target = slots.get("object") or slots.get("target_location", "forward")
+        return [RobotAction(
+            name="orient_head",
+            params={"target": target},
+            preconditions=["camera_active"],
+            postconditions=["facing_target"],
+            timeout_seconds=5.0,
+        )]
+    
+    def _plan_describe(self, slots: dict) -> List[RobotAction]:
+        return [RobotAction(
+            name="capture_scene",
+            params={},
+            preconditions=["camera_active"],
+            postconditions=["scene_captured"],
+            timeout_seconds=3.0,
+        ), RobotAction(
+            name="generate_description",
+            params={},
+            preconditions=["scene_captured"],
+            postconditions=["description_generated"],
+            timeout_seconds=10.0,
+        )]
+    
+    def _plan_hand_over(self, slots: dict) -> List[RobotAction]:
+        obj = slots.get("object", "held_object")
+        person = slots.get("person", "nearest_person")
+        return [
+            RobotAction(
+                name="locate_person",
+                params={"person": person},
+                preconditions=["camera_active"],
+                postconditions=["person_located"],
+                timeout_seconds=10.0,
+            ),
+            RobotAction(
+                name="extend_arm",
+                params={"target": person, "object": obj},
+                preconditions=["person_located", "object_grasped"],
+                postconditions=["arm_extended"],
+                timeout_seconds=10.0,
+            ),
+            RobotAction(
+                name="wait_for_grasp",
+                params={"force_threshold": 2.0},
+                preconditions=["arm_extended"],
+                postconditions=["handover_detected"],
+                timeout_seconds=15.0,
+            ),
+            RobotAction(
+                name="open_gripper",
+                params={"width": 0.10},
+                preconditions=["handover_detected"],
+                postconditions=["object_released"],
+                timeout_seconds=3.0,
+            ),
+        ]
+    
+    def _plan_stop(self, slots: dict) -> List[RobotAction]:
+        return [RobotAction(
+            name="emergency_stop",
+            params={"immediate": True},
+            preconditions=[],
+            postconditions=["all_motion_stopped"],
+            timeout_seconds=0.5,
+        )]
+    
+    def _from_llm_sequence(self, sequence: list) -> List[RobotAction]:
+        """Convert an LLM-generated action sequence into RobotActions."""
+        actions = []
+        for step in sequence:
+            actions.append(RobotAction(
+                name=step["action"],
+                params=step.get("params", {}),
+                preconditions=[],
+                postconditions=[],
+                timeout_seconds=30.0,
+            ))
+        return actions
+
+
+# Usage
+planner = ActionPlanner(robot_capabilities={
+    "max_reach": 0.8,
+    "gripper_max_width": 0.10,
+    "max_payload_kg": 2.0,
+})
+
+parsed = {
+    "intent": "pick_and_place",
+    "slots": {
+        "object": "red cup",
+        "source_location": "kitchen table",
+        "target_location": "counter",
+    }
+}
+
+plan = planner.plan(parsed)
+print(f"Action plan ({len(plan)} steps):")
+for i, action in enumerate(plan, 1):
+    print(f"  {i}. {action.name}({action.params})")
+    print(f"     Pre: {action.preconditions}")
+    print(f"     Post: {action.postconditions}")
+```
+
+## Safety Constraints
+
+Every command must pass through safety validation before execution. The safety layer is the final and most critical gate in the voice-to-action pipeline:
+
+```python
+from dataclasses import dataclass
+from typing import List, Optional, Tuple
+
+@dataclass
+class SafetyViolation:
+    """A detected safety constraint violation."""
+    severity: str       # "critical", "warning", "info"
+    constraint: str     # Name of the violated constraint
+    message: str        # Human-readable explanation
+    action_index: int   # Which action in the plan triggered this
+
+
+class SafetyValidator:
+    """
+    Validate robot action plans against safety constraints.
+    
+    Implements multiple layers of safety checks:
+    1. Forbidden action filtering
+    2. Workspace boundary enforcement
+    3. Payload and force limits
+    4. Human proximity awareness
+    5. Confirmation requirements for irreversible actions
+    """
+    
+    def __init__(self, config: dict):
+        """
+        Args:
+            config: Safety configuration dictionary with keys:
+                - workspace_bounds: {"x": (min, max), "y": ..., "z": ...}
+                - max_payload_kg: float
+                - max_speed_m_s: float
+                - max_force_n: float
+                - forbidden_zones: list of named zones
+                - require_confirmation: list of action types
+        """
+        self.config = config
+        
+        # Actions that are always blocked
+        self.blocked_actions = {
+            "throw", "launch", "drop_from_height",
+            "strike", "push_person", "squeeze",
+        }
+        
+        # Actions requiring explicit human confirmation
+        self.confirmation_required = set(
+            config.get("require_confirmation", [
+                "pour", "cut", "heat", "open_door_external",
+            ])
+        )
+    
+    def validate(
+        self, actions: List[RobotAction], context: Optional[dict] = None
+    ) -> Tuple[bool, List[SafetyViolation]]:
+        """
+        Validate an action plan for safety.
+        
+        Args:
+            actions: List of planned actions
+            context: Current environment context
+        
+        Returns:
+            Tuple of (is_safe, list_of_violations)
+        """
+        violations = []
+        
+        for i, action in enumerate(actions):
+            # Check 1: Blocked actions
+            if action.name in self.blocked_actions:
+                violations.append(SafetyViolation(
+                    severity="critical",
+                    constraint="forbidden_action",
+                    message=f"Action '{action.name}' is not permitted.",
+                    action_index=i,
+                ))
+            
+            # Check 2: Workspace boundaries
+            if "position" in action.params:
+                pos = action.params["position"]
+                bounds = self.config.get("workspace_bounds", {})
+                for axis in ("x", "y", "z"):
+                    if axis in pos and axis in bounds:
+                        lo, hi = bounds[axis]
+                        if not (lo <= pos[axis] <= hi):
+                            violations.append(SafetyViolation(
+                                severity="critical",
+                                constraint="workspace_boundary",
+                                message=f"Position {axis}={pos[axis]} is outside "
+                                        f"workspace [{lo}, {hi}].",
+                                action_index=i,
+                            ))
+            
+            # Check 3: Force and payload limits
+            if "force" in action.params:
+                max_force = self.config.get("max_force_n", 20.0)
+                if action.params["force"] > max_force:
+                    violations.append(SafetyViolation(
+                        severity="critical",
+                        constraint="force_limit",
+                        message=f"Requested force {action.params['force']}N "
+                                f"exceeds limit {max_force}N.",
+                        action_index=i,
+                    ))
+            
+            # Check 4: Speed limits
+            if "speed" in action.params:
+                max_speed = self.config.get("max_speed_m_s", 1.0)
+                if action.params["speed"] > max_speed:
+                    violations.append(SafetyViolation(
+                        severity="warning",
+                        constraint="speed_limit",
+                        message=f"Speed {action.params['speed']} m/s exceeds "
+                                f"safe limit {max_speed} m/s. Will be clamped.",
+                        action_index=i,
+                    ))
+            
+            # Check 5: Human proximity (if context available)
+            if context and "human_distance" in context:
+                if context["human_distance"] < 0.5:
+                    if action.name in ("navigate", "move_arm_fast"):
+                        violations.append(SafetyViolation(
+                            severity="warning",
+                            constraint="human_proximity",
+                            message=f"Human detected {context['human_distance']:.1f}m "
+                                    f"away. Reducing speed for action '{action.name}'.",
+                            action_index=i,
+                        ))
+            
+            # Check 6: Confirmation requirements
+            if action.name in self.confirmation_required:
+                violations.append(SafetyViolation(
+                    severity="info",
+                    constraint="confirmation_required",
+                    message=f"Action '{action.name}' requires user confirmation "
+                            f"before execution.",
+                    action_index=i,
+                ))
+        
+        # Determine overall safety
+        has_critical = any(v.severity == "critical" for v in violations)
+        is_safe = not has_critical
+        
+        return is_safe, violations
+
+
+# Usage
+safety = SafetyValidator(config={
+    "workspace_bounds": {
+        "x": (-1.0, 1.0),
+        "y": (-1.0, 1.0),
+        "z": (0.0, 1.5),
+    },
+    "max_payload_kg": 2.0,
+    "max_speed_m_s": 1.0,
+    "max_force_n": 20.0,
+    "require_confirmation": ["pour", "cut"],
+})
+
+is_safe, violations = safety.validate(plan)
+print(f"Plan safe: {is_safe}")
+for v in violations:
+    print(f"  [{v.severity}] Step {v.action_index}: {v.message}")
+```
+
+## Complete Voice-to-Action ROS 2 Node
+
+Bringing it all together into a single ROS 2 node:
+
+```python
+#!/usr/bin/env python3
+"""
+ROS 2 node: Voice-to-Action pipeline.
+
+Subscribes to /speech/transcription, parses commands,
+plans actions, validates safety, and publishes action plans.
+"""
+
+import rclpy
+from rclpy.node import Node
+from std_msgs.msg import String
+import json
+
+
+class VoiceToActionNode(Node):
+    """Convert speech transcriptions into validated robot action plans."""
+    
+    def __init__(self):
+        super().__init__("voice_to_action_node")
+        
+        # Parameters
+        self.declare_parameter("use_llm", True)
+        self.declare_parameter("llm_model", "gpt-4o-mini")
+        self.declare_parameter("require_confirmation_threshold", 0.7)
+        
+        use_llm = self.get_parameter("use_llm").value
+        
+        # Initialize pipeline components
+        self.rule_classifier = RuleBasedIntentClassifier()
+        self.slot_extractor = SlotExtractor()
+        self.planner = ActionPlanner(robot_capabilities={
+            "max_reach": 0.8,
+            "gripper_max_width": 0.10,
+            "max_payload_kg": 2.0,
+        })
+        self.safety = SafetyValidator(config={
+            "workspace_bounds": {"x": (-1.0, 1.0), "y": (-1.0, 1.0), "z": (0.0, 1.5)},
+            "max_force_n": 20.0,
+            "max_speed_m_s": 1.0,
+        })
+        
+        if use_llm:
+            model = self.get_parameter("llm_model").value
+            self.llm_parser = LLMCommandParser(model=model)
+            self.get_logger().info(f"LLM parser initialized with {model}")
+        else:
+            self.llm_parser = None
+        
+        # Subscribers
+        self.transcription_sub = self.create_subscription(
+            String, "/speech/transcription",
+            self.on_transcription, 10
+        )
+        
+        # Publishers
+        self.action_plan_pub = self.create_publisher(
+            String, "/robot/action_plan", 10
+        )
+        self.feedback_pub = self.create_publisher(
+            String, "/speech/feedback", 10
+        )
+        
+        self.get_logger().info("Voice-to-Action node ready.")
+    
+    def on_transcription(self, msg: String):
+        """Process incoming transcription."""
+        text = msg.data
+        self.get_logger().info(f"Received: '{text}'")
+        
+        # Step 1: Parse command
+        if self.llm_parser:
+            parsed = self.llm_parser.parse(text)
+        else:
+            intent, confidence = self.rule_classifier.classify(text)
+            slots = self.slot_extractor.extract(text, intent)
+            parsed = {
+                "intent": intent.value,
+                "confidence": confidence,
+                "slots": slots,
+            }
+        
+        # Step 2: Check for clarification needs
+        if parsed.get("requires_clarification"):
+            feedback = String()
+            feedback.data = parsed["clarification_question"]
+            self.feedback_pub.publish(feedback)
+            return
+        
+        # Step 3: Plan actions
+        actions = self.planner.plan(parsed)
+        
+        # Step 4: Validate safety
+        is_safe, violations = self.safety.validate(actions)
+        
+        if not is_safe:
+            critical = [v for v in violations if v.severity == "critical"]
+            feedback = String()
+            feedback.data = (
+                f"I cannot execute that command. "
+                f"Safety issue: {critical[0].message}"
+            )
+            self.feedback_pub.publish(feedback)
+            self.get_logger().warn(f"Command rejected: {critical[0].message}")
+            return
+        
+        # Step 5: Publish action plan
+        plan_msg = String()
+        plan_msg.data = json.dumps({
+            "command": text,
+            "intent": parsed["intent"],
+            "actions": [
+                {"name": a.name, "params": a.params,
+                 "timeout": a.timeout_seconds}
+                for a in actions
+            ],
+            "safety_warnings": [
+                {"severity": v.severity, "message": v.message}
+                for v in violations
+            ],
+        })
+        self.action_plan_pub.publish(plan_msg)
+        
+        self.get_logger().info(
+            f"Published action plan: {len(actions)} actions for intent '{parsed['intent']}'"
+        )
+
+
+def main(args=None):
+    rclpy.init(args=args)
+    node = VoiceToActionNode()
+    try:
+        rclpy.spin(node)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        node.destroy_node()
+        rclpy.shutdown()
+
+if __name__ == "__main__":
+    main()
+```
+
+## Summary
+
+The voice-to-action pipeline transforms spoken human language into safe, executable robot behaviors through a layered architecture:
+
+| Layer | Purpose | Implementation |
+|-------|---------|----------------|
+| **Intent Recognition** | Classify what the user wants | Rule-based patterns or zero-shot transformers |
+| **Slot Filling** | Extract action parameters | Regex extraction and entity recognition |
+| **LLM Parsing** | Handle complex, open-ended commands | Structured JSON output from GPT-4 or local LLMs |
+| **Action Planning** | Map intents to robot primitives | Template-based or LLM-generated sequences |
+| **Safety Validation** | Prevent dangerous actions | Multi-layer constraint checking |
+
+The key design principles are:
+- **Fail safe**: reject ambiguous or dangerous commands rather than guessing
+- **Clarify proactively**: ask the user when intent or references are unclear
+- **Layer defenses**: combine fast rule-based checks with flexible LLM parsing
+- **Validate everything**: no action reaches the motors without safety review
+
+## Exercises
+
+1. **Intent Classifier Evaluation**: Create a test set of 50 robot commands (10 per intent category). Evaluate both the rule-based and transformer classifiers. Measure accuracy, precision, and recall for each intent type.
+
+2. **Slot Extraction Challenge**: Handle these ambiguous commands:
+   - "Put it over there" (no explicit object or location)
+   - "Move the thing next to the other thing on the left"
+   - "Get me something to drink"
+   
+   Design a dialogue strategy that resolves each ambiguity.
+
+3. **LLM Comparison**: Compare command parsing using GPT-4o-mini, Llama 3.1 8B (via Ollama), and a fine-tuned DistilBERT model. Measure parsing accuracy and latency for 20 commands of varying complexity.
+
+4. **Safety Stress Test**: Write 15 adversarial commands designed to trick the safety validator (e.g., "gently throw the ball", "push the chair into the person"). Verify that your safety layer catches all dangerous actions.
+
+5. **End-to-End Integration**: Connect the `SpeechRecognitionNode` from the previous chapter to the `VoiceToActionNode`. Speak commands into the microphone and verify that correct action plans appear on the `/robot/action_plan` topic.
+
+## Next Steps
+
+Continue to [Multimodal Interaction](./multimodal-interaction) to learn how to combine speech understanding with computer vision, gesture recognition, and Vision-Language Models for truly natural human-robot interaction.

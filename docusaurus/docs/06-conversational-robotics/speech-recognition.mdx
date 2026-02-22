@@ -1,0 +1,928 @@
+---
+sidebar_position: 2
+title: "Speech Recognition for Robots"
+description: "Implementing automatic speech recognition with OpenAI Whisper, audio processing pipelines, and ROS 2 integration for real-time robot speech input"
+---
+
+# Speech Recognition for Robots
+
+Before a robot can understand what you are saying, it must first convert the raw acoustic signal from a microphone into text. This process -- **Automatic Speech Recognition (ASR)** -- is the foundational layer of any conversational robotics system. In this chapter, you will learn how ASR works, how to deploy OpenAI's Whisper model for robust transcription, and how to integrate speech input into a ROS 2 robotic system.
+
+## Learning Objectives
+
+By the end of this chapter, you will be able to:
+
+1. **Explain** how modern ASR systems convert audio waveforms into text
+2. **Deploy** OpenAI Whisper for offline and streaming transcription
+3. **Process** audio signals including resampling, noise reduction, and voice activity detection
+4. **Build** a ROS 2 node that publishes real-time transcription results
+5. **Optimize** ASR performance for robotic environments with background noise
+
+## How Automatic Speech Recognition Works
+
+Modern ASR systems are built on the encoder-decoder transformer architecture. The process follows a well-defined pipeline:
+
+```
+┌──────────┐    ┌──────────────┐    ┌──────────────┐    ┌──────────┐
+│  Audio   │───▶│  Feature     │───▶│  Transformer │───▶│  Text    │
+│  Input   │    │  Extraction  │    │  Encoder-    │    │  Output  │
+│ (waveform│    │  (Mel        │    │  Decoder     │    │          │
+│  16kHz)  │    │  Spectrogram)│    │              │    │          │
+└──────────┘    └──────────────┘    └──────────────┘    └──────────┘
+```
+
+### Step 1: Audio Capture
+
+The microphone captures pressure variations in the air and converts them to an electrical signal, which is digitized at a specific **sample rate**. For speech, 16 kHz is the standard -- capturing frequencies up to 8 kHz (Nyquist theorem), which covers the full range of human speech.
+
+### Step 2: Feature Extraction
+
+Raw audio samples are not fed directly into neural networks. Instead, we compute a **Mel spectrogram** -- a time-frequency representation that mimics how the human ear perceives sound:
+
+```python
+import numpy as np
+import torch
+
+def compute_mel_spectrogram(audio: np.ndarray, sr: int = 16000) -> np.ndarray:
+    """
+    Compute a log-Mel spectrogram from raw audio.
+    
+    This mirrors what Whisper does internally:
+    1. Apply Short-Time Fourier Transform (STFT)
+    2. Map frequency bins to Mel scale
+    3. Take log of the magnitude
+    
+    Args:
+        audio: Raw audio samples as float32 array
+        sr: Sample rate in Hz (Whisper expects 16000)
+    
+    Returns:
+        Log-Mel spectrogram as 2D numpy array [n_mels, time_frames]
+    """
+    # Parameters matching Whisper's configuration
+    n_fft = 400          # FFT window size (25ms at 16kHz)
+    hop_length = 160     # Hop between windows (10ms at 16kHz)
+    n_mels = 80          # Number of Mel frequency bins
+    
+    # Compute STFT
+    window = np.hanning(n_fft)
+    stft = np.array([
+        np.fft.rfft(audio[i:i + n_fft] * window)
+        for i in range(0, len(audio) - n_fft, hop_length)
+    ])
+    magnitudes = np.abs(stft) ** 2
+    
+    # Create Mel filterbank
+    mel_filters = _create_mel_filterbank(sr, n_fft, n_mels)
+    
+    # Apply filterbank and take log
+    mel_spec = mel_filters @ magnitudes.T
+    log_mel_spec = np.log10(np.maximum(mel_spec, 1e-10))
+    
+    return log_mel_spec
+```
+
+### Step 3: Encoder-Decoder Inference
+
+The Mel spectrogram is fed into a transformer encoder that produces a sequence of hidden states. The decoder then autoregressively generates text tokens, attending to both the encoder output and previously generated tokens.
+
+## OpenAI Whisper
+
+**Whisper** is OpenAI's open-source ASR model, trained on 680,000 hours of multilingual audio data collected from the web. It is remarkably robust to background noise, accents, and domain-specific vocabulary -- making it ideal for robotic applications.
+
+### Whisper Model Sizes
+
+| Model | Parameters | VRAM Required | Relative Speed | English Word Error Rate |
+|-------|-----------|---------------|----------------|------------------------|
+| `tiny` | 39 M | ~1 GB | ~10x | ~7.7% |
+| `base` | 74 M | ~1 GB | ~7x | ~5.5% |
+| `small` | 244 M | ~2 GB | ~4x | ~4.2% |
+| `medium` | 769 M | ~5 GB | ~2x | ~3.1% |
+| `large-v3` | 1.55 B | ~10 GB | 1x | ~2.5% |
+| `turbo` | 809 M | ~6 GB | ~8x | ~2.7% |
+
+For robotics, the `small` or `turbo` models offer the best trade-off between accuracy and latency. The `turbo` model is particularly attractive -- it achieves near-`large` accuracy at roughly 8x the speed.
+
+### Installation
+
+```bash
+# Install Whisper and audio dependencies
+pip install openai-whisper sounddevice numpy
+
+# For GPU acceleration (recommended)
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+
+# Verify installation
+python -c "import whisper; model = whisper.load_model('tiny'); print('Whisper loaded successfully')"
+```
+
+### Basic Transcription
+
+```python
+import whisper
+import numpy as np
+
+def transcribe_audio_file(filepath: str, model_size: str = "small") -> dict:
+    """
+    Transcribe an audio file using Whisper.
+    
+    Args:
+        filepath: Path to audio file (WAV, MP3, FLAC, etc.)
+        model_size: Whisper model variant to use
+    
+    Returns:
+        Dictionary with 'text', 'segments', and 'language' keys
+    """
+    # Load the model (cached after first download)
+    model = whisper.load_model(model_size)
+    
+    # Transcribe with options tuned for robotics
+    result = model.transcribe(
+        filepath,
+        language="en",              # Set language to avoid detection overhead
+        fp16=True,                  # Use half-precision for faster GPU inference
+        temperature=0.0,            # Greedy decoding for deterministic output
+        no_speech_threshold=0.6,    # Filter out non-speech segments
+        condition_on_previous_text=True,  # Use context from prior segments
+    )
+    
+    print(f"Detected language: {result['language']}")
+    print(f"Transcription: {result['text']}")
+    
+    # Each segment includes timestamps
+    for segment in result["segments"]:
+        start = segment["start"]
+        end = segment["end"]
+        text = segment["text"]
+        print(f"  [{start:.1f}s - {end:.1f}s] {text}")
+    
+    return result
+
+
+# Usage
+result = transcribe_audio_file("robot_command.wav", model_size="small")
+```
+
+## Audio Processing for Robotic Environments
+
+Robots operate in acoustically challenging environments. A kitchen robot hears the dishwasher and exhaust fan. A warehouse robot competes with forklifts and conveyor belts. Effective audio processing is essential before ASR can succeed.
+
+### Capturing Audio with sounddevice
+
+```python
+import sounddevice as sd
+import numpy as np
+from typing import Optional
+
+class AudioCapture:
+    """Capture audio from a microphone for robotic speech recognition."""
+    
+    def __init__(
+        self,
+        sample_rate: int = 16000,
+        channels: int = 1,
+        device: Optional[int] = None,
+        chunk_duration: float = 0.5,
+    ):
+        """
+        Initialize audio capture.
+        
+        Args:
+            sample_rate: Sample rate in Hz (16000 for Whisper)
+            channels: Number of audio channels (1 = mono)
+            device: Audio device index (None = default)
+            chunk_duration: Duration of each audio chunk in seconds
+        """
+        self.sample_rate = sample_rate
+        self.channels = channels
+        self.device = device
+        self.chunk_size = int(sample_rate * chunk_duration)
+        self._buffer = []
+    
+    def list_devices(self):
+        """Print available audio input devices."""
+        devices = sd.query_devices()
+        print("Available audio devices:")
+        for i, dev in enumerate(devices):
+            if dev["max_input_channels"] > 0:
+                print(f"  [{i}] {dev['name']} "
+                      f"(inputs: {dev['max_input_channels']}, "
+                      f"rate: {dev['default_samplerate']})")
+    
+    def record_fixed(self, duration: float) -> np.ndarray:
+        """
+        Record a fixed-duration audio clip.
+        
+        Args:
+            duration: Recording duration in seconds
+        
+        Returns:
+            Audio samples as float32 numpy array
+        """
+        print(f"Recording for {duration} seconds...")
+        audio = sd.rec(
+            int(self.sample_rate * duration),
+            samplerate=self.sample_rate,
+            channels=self.channels,
+            dtype="float32",
+            device=self.device,
+        )
+        sd.wait()  # Block until recording is complete
+        print("Recording complete.")
+        return audio.flatten()
+    
+    def start_stream(self, callback):
+        """
+        Start a continuous audio stream with a callback.
+        
+        Args:
+            callback: Function called with each audio chunk (np.ndarray)
+        """
+        def _stream_callback(indata, frames, time, status):
+            if status:
+                print(f"Audio stream warning: {status}")
+            callback(indata.copy().flatten())
+        
+        self.stream = sd.InputStream(
+            samplerate=self.sample_rate,
+            channels=self.channels,
+            dtype="float32",
+            device=self.device,
+            blocksize=self.chunk_size,
+            callback=_stream_callback,
+        )
+        self.stream.start()
+        print("Audio stream started.")
+    
+    def stop_stream(self):
+        """Stop the audio stream."""
+        if hasattr(self, "stream"):
+            self.stream.stop()
+            self.stream.close()
+            print("Audio stream stopped.")
+```
+
+### Voice Activity Detection (VAD)
+
+Robots should not run ASR continuously on silence. **Voice Activity Detection** identifies when someone is actually speaking, so we only transcribe meaningful audio segments:
+
+```python
+import numpy as np
+from collections import deque
+
+class EnergyVAD:
+    """
+    Simple energy-based Voice Activity Detection.
+    
+    Classifies audio frames as speech or silence based on
+    short-term energy and zero-crossing rate.
+    """
+    
+    def __init__(
+        self,
+        sample_rate: int = 16000,
+        frame_ms: int = 30,
+        energy_threshold: float = 0.01,
+        zcr_threshold: float = 0.1,
+        min_speech_frames: int = 10,
+        min_silence_frames: int = 30,
+    ):
+        self.frame_size = int(sample_rate * frame_ms / 1000)
+        self.energy_threshold = energy_threshold
+        self.zcr_threshold = zcr_threshold
+        self.min_speech_frames = min_speech_frames
+        self.min_silence_frames = min_silence_frames
+        
+        self._speech_count = 0
+        self._silence_count = 0
+        self._is_speaking = False
+        self._audio_buffer = deque(maxlen=sample_rate * 30)  # 30s max
+    
+    def _compute_energy(self, frame: np.ndarray) -> float:
+        """Root mean square energy of a frame."""
+        return np.sqrt(np.mean(frame ** 2))
+    
+    def _compute_zcr(self, frame: np.ndarray) -> float:
+        """Zero-crossing rate of a frame."""
+        signs = np.sign(frame)
+        crossings = np.sum(np.abs(np.diff(signs)) > 0)
+        return crossings / len(frame)
+    
+    def process_chunk(self, audio_chunk: np.ndarray) -> dict:
+        """
+        Process an audio chunk and detect voice activity.
+        
+        Returns:
+            dict with keys:
+                - 'is_speech': bool, whether speech is detected
+                - 'energy': float, current energy level
+                - 'utterance': np.ndarray or None, complete utterance when speech ends
+        """
+        energy = self._compute_energy(audio_chunk)
+        zcr = self._compute_zcr(audio_chunk)
+        
+        is_active = energy > self.energy_threshold and zcr < self.zcr_threshold
+        
+        result = {"is_speech": False, "energy": energy, "utterance": None}
+        
+        if is_active:
+            self._speech_count += 1
+            self._silence_count = 0
+            self._audio_buffer.extend(audio_chunk)
+            
+            if self._speech_count >= self.min_speech_frames:
+                self._is_speaking = True
+                result["is_speech"] = True
+        else:
+            self._silence_count += 1
+            
+            if self._is_speaking:
+                self._audio_buffer.extend(audio_chunk)
+                result["is_speech"] = True
+                
+                if self._silence_count >= self.min_silence_frames:
+                    # Speech ended -- return the complete utterance
+                    result["is_speech"] = False
+                    result["utterance"] = np.array(list(self._audio_buffer))
+                    self._audio_buffer.clear()
+                    self._is_speaking = False
+                    self._speech_count = 0
+            else:
+                self._speech_count = 0
+        
+        return result
+```
+
+### Noise Reduction
+
+Robotic environments are noisy. A simple but effective approach is **spectral gating** -- estimating the noise profile during silence and subtracting it:
+
+```python
+import numpy as np
+
+def spectral_gate(
+    audio: np.ndarray,
+    sample_rate: int = 16000,
+    noise_duration: float = 0.5,
+    threshold_factor: float = 1.5,
+) -> np.ndarray:
+    """
+    Apply spectral gating for noise reduction.
+    
+    Uses the first `noise_duration` seconds to estimate the noise floor,
+    then attenuates frequency bins below the threshold.
+    
+    Args:
+        audio: Input audio as float32 array
+        sample_rate: Sample rate in Hz
+        noise_duration: Seconds of audio to use for noise estimation
+        threshold_factor: Multiplier for noise threshold
+    
+    Returns:
+        Denoised audio as float32 array
+    """
+    n_fft = 2048
+    hop = n_fft // 4
+    noise_samples = int(sample_rate * noise_duration)
+    
+    # Compute STFT
+    window = np.hanning(n_fft)
+    n_frames = (len(audio) - n_fft) // hop + 1
+    stft = np.array([
+        np.fft.rfft(audio[i * hop : i * hop + n_fft] * window)
+        for i in range(n_frames)
+    ])
+    
+    magnitude = np.abs(stft)
+    phase = np.angle(stft)
+    
+    # Estimate noise spectrum from initial silence
+    noise_frames = noise_samples // hop
+    noise_profile = np.mean(magnitude[:noise_frames], axis=0)
+    
+    # Apply spectral gate
+    threshold = noise_profile * threshold_factor
+    mask = magnitude > threshold
+    cleaned_magnitude = magnitude * mask
+    
+    # Reconstruct audio via inverse STFT
+    cleaned_stft = cleaned_magnitude * np.exp(1j * phase)
+    output = np.zeros(len(audio))
+    for i, frame in enumerate(cleaned_stft):
+        samples = np.fft.irfft(frame)[:n_fft]
+        output[i * hop : i * hop + n_fft] += samples * window
+    
+    return output.astype(np.float32)
+```
+
+## Real-Time Transcription Pipeline
+
+For a robot to respond promptly, we need near-real-time transcription. The following class combines audio capture, VAD, and Whisper into a streaming pipeline:
+
+```python
+import whisper
+import numpy as np
+import threading
+import queue
+from typing import Callable, Optional
+
+class RealtimeTranscriber:
+    """
+    Real-time speech-to-text pipeline for robotic applications.
+    
+    Combines audio capture, voice activity detection, and
+    Whisper inference into a continuous transcription system.
+    """
+    
+    def __init__(
+        self,
+        model_size: str = "small",
+        language: str = "en",
+        device: str = "cuda",
+    ):
+        print(f"Loading Whisper {model_size} model on {device}...")
+        self.model = whisper.load_model(model_size, device=device)
+        self.language = language
+        
+        self.audio_capture = AudioCapture(sample_rate=16000)
+        self.vad = EnergyVAD(sample_rate=16000)
+        
+        self._utterance_queue = queue.Queue()
+        self._running = False
+        self._callbacks = []
+    
+    def on_transcription(self, callback: Callable[[str, float], None]):
+        """
+        Register a callback for transcription results.
+        
+        Args:
+            callback: Function(text: str, confidence: float)
+        """
+        self._callbacks.append(callback)
+    
+    def _audio_callback(self, audio_chunk: np.ndarray):
+        """Process incoming audio through VAD."""
+        result = self.vad.process_chunk(audio_chunk)
+        if result["utterance"] is not None:
+            self._utterance_queue.put(result["utterance"])
+    
+    def _transcription_worker(self):
+        """Background thread that runs Whisper on detected utterances."""
+        while self._running:
+            try:
+                utterance = self._utterance_queue.get(timeout=0.5)
+            except queue.Empty:
+                continue
+            
+            # Pad or trim to 30 seconds (Whisper's expected input length)
+            audio = whisper.pad_or_trim(utterance.astype(np.float32))
+            
+            # Compute Mel spectrogram
+            mel = whisper.log_mel_spectrogram(audio).to(self.model.device)
+            
+            # Decode with Whisper
+            options = whisper.DecodingOptions(
+                language=self.language,
+                fp16=(str(self.model.device) != "cpu"),
+                temperature=0.0,
+            )
+            result = whisper.decode(self.model, mel, options)
+            
+            text = result.text.strip()
+            confidence = 1.0 - result.no_speech_prob
+            
+            if text and confidence > 0.4:
+                for cb in self._callbacks:
+                    cb(text, confidence)
+    
+    def start(self):
+        """Start the real-time transcription pipeline."""
+        self._running = True
+        
+        # Start transcription worker thread
+        self._worker = threading.Thread(
+            target=self._transcription_worker, daemon=True
+        )
+        self._worker.start()
+        
+        # Start audio stream
+        self.audio_capture.start_stream(self._audio_callback)
+        print("Real-time transcription active. Speak into the microphone.")
+    
+    def stop(self):
+        """Stop the transcription pipeline."""
+        self._running = False
+        self.audio_capture.stop_stream()
+        self._worker.join(timeout=2.0)
+        print("Transcription stopped.")
+
+
+# Usage example
+if __name__ == "__main__":
+    transcriber = RealtimeTranscriber(model_size="small")
+    
+    def handle_transcription(text: str, confidence: float):
+        print(f"[{confidence:.0%}] {text}")
+    
+    transcriber.on_transcription(handle_transcription)
+    transcriber.start()
+    
+    try:
+        input("Press Enter to stop...\n")
+    finally:
+        transcriber.stop()
+```
+
+## ROS 2 Integration
+
+In a robotic system, speech recognition must integrate with the broader software architecture. We publish transcriptions as ROS 2 messages so any node in the system can subscribe to spoken commands.
+
+### Custom Message Definition
+
+First, define a custom message type for transcription results:
+
+```
+# msg/Transcription.msg
+# Automatic speech recognition result
+
+std_msgs/Header header          # Timestamp and frame_id
+string text                     # Transcribed text
+float32 confidence              # ASR confidence score (0.0 to 1.0)
+string language                 # Detected language code
+float32 audio_duration          # Duration of audio segment in seconds
+bool is_final                   # True if this is a final (not interim) result
+```
+
+### Speech Recognition ROS 2 Node
+
+```python
+#!/usr/bin/env python3
+"""
+ROS 2 node for automatic speech recognition using Whisper.
+
+Publishes transcription results on /speech/transcription topic.
+Subscribes to /speech/enable to start/stop listening.
+"""
+
+import rclpy
+from rclpy.node import Node
+from std_msgs.msg import String, Bool, Header
+from std_srvs.srv import SetBool
+
+import whisper
+import numpy as np
+import sounddevice as sd
+import threading
+import queue
+import time
+
+
+class SpeechRecognitionNode(Node):
+    """ROS 2 node that performs real-time speech recognition."""
+    
+    def __init__(self):
+        super().__init__("speech_recognition_node")
+        
+        # Declare parameters
+        self.declare_parameter("model_size", "small")
+        self.declare_parameter("language", "en")
+        self.declare_parameter("device", "cuda")
+        self.declare_parameter("sample_rate", 16000)
+        self.declare_parameter("energy_threshold", 0.01)
+        self.declare_parameter("auto_start", True)
+        
+        # Get parameters
+        model_size = self.get_parameter("model_size").value
+        language = self.get_parameter("language").value
+        device = self.get_parameter("device").value
+        self.sample_rate = self.get_parameter("sample_rate").value
+        
+        # Load Whisper model
+        self.get_logger().info(f"Loading Whisper '{model_size}' on {device}...")
+        self.model = whisper.load_model(model_size, device=device)
+        self.language = language
+        self.get_logger().info("Whisper model loaded successfully.")
+        
+        # Publishers
+        self.transcription_pub = self.create_publisher(
+            String, "/speech/transcription", 10
+        )
+        self.status_pub = self.create_publisher(
+            String, "/speech/status", 10
+        )
+        
+        # Service to enable/disable listening
+        self.enable_srv = self.create_service(
+            SetBool, "/speech/enable", self.enable_callback
+        )
+        
+        # Audio and VAD setup
+        self.vad = EnergyVAD(
+            sample_rate=self.sample_rate,
+            energy_threshold=self.get_parameter("energy_threshold").value,
+        )
+        self._utterance_queue = queue.Queue()
+        self._listening = False
+        self._stream = None
+        
+        # Start transcription worker
+        self._running = True
+        self._worker = threading.Thread(
+            target=self._transcription_loop, daemon=True
+        )
+        self._worker.start()
+        
+        # Auto-start if configured
+        if self.get_parameter("auto_start").value:
+            self._start_listening()
+        
+        self.get_logger().info("Speech recognition node ready.")
+    
+    def enable_callback(self, request, response):
+        """Service callback to enable or disable listening."""
+        if request.data:
+            self._start_listening()
+            response.success = True
+            response.message = "Speech recognition enabled"
+        else:
+            self._stop_listening()
+            response.success = True
+            response.message = "Speech recognition disabled"
+        return response
+    
+    def _start_listening(self):
+        """Start capturing audio from the microphone."""
+        if self._listening:
+            return
+        
+        def audio_callback(indata, frames, time_info, status):
+            if status:
+                self.get_logger().warn(f"Audio status: {status}")
+            chunk = indata.copy().flatten()
+            result = self.vad.process_chunk(chunk)
+            if result["utterance"] is not None:
+                self._utterance_queue.put(result["utterance"])
+        
+        self._stream = sd.InputStream(
+            samplerate=self.sample_rate,
+            channels=1,
+            dtype="float32",
+            blocksize=int(self.sample_rate * 0.5),
+            callback=audio_callback,
+        )
+        self._stream.start()
+        self._listening = True
+        self.get_logger().info("Listening for speech...")
+        
+        # Publish status
+        status_msg = String()
+        status_msg.data = "listening"
+        self.status_pub.publish(status_msg)
+    
+    def _stop_listening(self):
+        """Stop audio capture."""
+        if self._stream is not None:
+            self._stream.stop()
+            self._stream.close()
+            self._stream = None
+        self._listening = False
+        self.get_logger().info("Stopped listening.")
+        
+        status_msg = String()
+        status_msg.data = "idle"
+        self.status_pub.publish(status_msg)
+    
+    def _transcription_loop(self):
+        """Worker thread for Whisper inference."""
+        while self._running:
+            try:
+                utterance = self._utterance_queue.get(timeout=0.5)
+            except queue.Empty:
+                continue
+            
+            start_time = time.time()
+            
+            # Prepare audio for Whisper
+            audio = whisper.pad_or_trim(utterance.astype(np.float32))
+            mel = whisper.log_mel_spectrogram(audio).to(self.model.device)
+            
+            # Run inference
+            options = whisper.DecodingOptions(
+                language=self.language,
+                fp16=(str(self.model.device) != "cpu"),
+                temperature=0.0,
+            )
+            result = whisper.decode(self.model, mel, options)
+            
+            elapsed = time.time() - start_time
+            text = result.text.strip()
+            confidence = 1.0 - result.no_speech_prob
+            
+            if text and confidence > 0.4:
+                self.get_logger().info(
+                    f"Transcribed ({elapsed:.2f}s, conf={confidence:.0%}): {text}"
+                )
+                
+                # Publish transcription
+                msg = String()
+                msg.data = text
+                self.transcription_pub.publish(msg)
+    
+    def destroy_node(self):
+        """Clean shutdown."""
+        self._running = False
+        self._stop_listening()
+        self._worker.join(timeout=2.0)
+        super().destroy_node()
+
+
+def main(args=None):
+    rclpy.init(args=args)
+    node = SpeechRecognitionNode()
+    
+    try:
+        rclpy.spin(node)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        node.destroy_node()
+        rclpy.shutdown()
+
+
+if __name__ == "__main__":
+    main()
+```
+
+### Launch File
+
+```python
+# launch/speech_recognition.launch.py
+from launch import LaunchDescription
+from launch_ros.actions import Node
+from launch.actions import DeclareLaunchArgument
+from launch.substitutions import LaunchConfiguration
+
+def generate_launch_description():
+    return LaunchDescription([
+        DeclareLaunchArgument("model_size", default_value="small",
+                              description="Whisper model size"),
+        DeclareLaunchArgument("language", default_value="en",
+                              description="Target language code"),
+        DeclareLaunchArgument("device", default_value="cuda",
+                              description="Inference device (cuda or cpu)"),
+        
+        Node(
+            package="conversational_robotics",
+            executable="speech_recognition_node",
+            name="speech_recognition",
+            parameters=[{
+                "model_size": LaunchConfiguration("model_size"),
+                "language": LaunchConfiguration("language"),
+                "device": LaunchConfiguration("device"),
+                "sample_rate": 16000,
+                "energy_threshold": 0.01,
+                "auto_start": True,
+            }],
+            output="screen",
+        ),
+    ])
+```
+
+## Performance Considerations for Robotics
+
+### Latency Budget
+
+In conversational robotics, the total response time from the end of a user's utterance to the start of the robot's physical response should be under **2 seconds** for natural-feeling interaction. Here is how the latency budget typically breaks down:
+
+| Stage | Target Latency | Notes |
+|-------|---------------|-------|
+| VAD end-of-speech detection | 300 ms | Silence threshold |
+| Whisper inference (small, GPU) | 200--400 ms | Depends on utterance length |
+| NLU processing | 100--300 ms | Intent classification + slot filling |
+| Action planning | 100--200 ms | Motion planning initialization |
+| **Total** | **700--1200 ms** | Within 2-second budget |
+
+### Optimizing Whisper for Low Latency
+
+```python
+import whisper
+import torch
+
+def load_optimized_model(model_size: str = "small"):
+    """
+    Load Whisper with optimizations for real-time robotic use.
+    """
+    model = whisper.load_model(model_size)
+    
+    # Use half-precision on GPU for ~2x speedup
+    if torch.cuda.is_available():
+        model = model.half()
+    
+    # Compile with torch.compile for additional speedup (PyTorch 2.0+)
+    if hasattr(torch, "compile"):
+        model.encoder = torch.compile(model.encoder, mode="reduce-overhead")
+    
+    return model
+```
+
+### Handling Far-Field Audio
+
+Robots often need to hear commands from across a room. **Microphone arrays** with beamforming focus the audio capture in the direction of the speaker:
+
+| Microphone Setup | Range | Best For |
+|-----------------|-------|----------|
+| Single USB mic | 0.5--1 m | Tabletop, close interaction |
+| 2-element array | 1--2 m | Desktop assistant robots |
+| 4-element circular array | 2--4 m | Mobile service robots |
+| 6+ element array (ReSpeaker) | 3--5 m | Room-scale interaction |
+
+```python
+# Example: Direction of Arrival (DOA) with a circular mic array
+import numpy as np
+
+def estimate_doa(signals: np.ndarray, mic_positions: np.ndarray,
+                 sample_rate: int = 16000) -> float:
+    """
+    Estimate direction of arrival using GCC-PHAT.
+    
+    Args:
+        signals: Audio from each microphone [n_mics, n_samples]
+        mic_positions: 2D positions of microphones [n_mics, 2]
+        sample_rate: Sample rate in Hz
+    
+    Returns:
+        Estimated angle in degrees (0-360)
+    """
+    n_mics = signals.shape[0]
+    n_fft = 4096
+    best_angle = 0
+    best_score = -np.inf
+    
+    for angle in range(0, 360, 5):
+        score = 0
+        theta = np.radians(angle)
+        direction = np.array([np.cos(theta), np.sin(theta)])
+        
+        for i in range(n_mics):
+            for j in range(i + 1, n_mics):
+                # Expected time delay between mic pair
+                d = mic_positions[j] - mic_positions[i]
+                expected_delay = np.dot(d, direction) / 343.0  # speed of sound
+                expected_samples = int(expected_delay * sample_rate)
+                
+                # GCC-PHAT cross-correlation
+                fft_i = np.fft.rfft(signals[i], n=n_fft)
+                fft_j = np.fft.rfft(signals[j], n=n_fft)
+                gcc = fft_i * np.conj(fft_j)
+                gcc /= np.abs(gcc) + 1e-10
+                cc = np.fft.irfft(gcc)
+                
+                score += cc[expected_samples % n_fft]
+        
+        if score > best_score:
+            best_score = score
+            best_angle = angle
+    
+    return best_angle
+```
+
+## Handling Edge Cases
+
+Robust ASR for robotics must handle situations that rarely arise in typical voice assistant scenarios:
+
+| Edge Case | Solution |
+|-----------|----------|
+| **Overlapping speakers** | Speaker diarization to separate voices; only process commands from authorized speakers |
+| **Robot's own speech** | Echo cancellation -- subtract the robot's TTS output from the microphone signal |
+| **Partial commands** | Buffer and wait for completion; use dialogue management to prompt for missing information |
+| **Non-speech sounds** | VAD filtering; train a secondary classifier for non-speech events (claps, knocks) |
+| **Keyword false triggers** | Use a lightweight wake-word detector before activating full ASR |
+
+## Summary
+
+In this chapter, you learned the complete pipeline for adding speech recognition to a robot:
+
+1. **Audio capture** using `sounddevice` with proper sample rates and buffering
+2. **Voice activity detection** to identify when a human is speaking
+3. **Noise reduction** via spectral gating for challenging environments
+4. **Whisper inference** for accurate, robust transcription
+5. **ROS 2 integration** to publish transcriptions as messages for downstream nodes
+6. **Performance optimization** to meet real-time latency requirements
+
+The speech recognition node you built publishes text on the `/speech/transcription` topic. In the next chapter, you will build the pipeline that subscribes to these transcriptions and converts them into executable robot actions.
+
+## Exercises
+
+1. **Basic ASR Node**: Implement the `SpeechRecognitionNode` and verify it publishes transcriptions by running `ros2 topic echo /speech/transcription` in a separate terminal.
+
+2. **VAD Tuning**: Record 30 seconds of audio in your workspace (with typical background noise). Tune the `energy_threshold` and `min_silence_frames` parameters of the `EnergyVAD` class until speech segments are reliably detected without false triggers.
+
+3. **Model Comparison**: Benchmark Whisper `tiny`, `small`, and `turbo` models on the same set of 10 robot commands. Measure transcription accuracy (word error rate) and inference latency. Which model is best for your hardware?
+
+4. **Noise Robustness**: Record the same command ("pick up the red block") at three distances (0.5 m, 2 m, 5 m) and with varying background noise. Compare Whisper's transcription accuracy across conditions.
+
+5. **Wake Word Integration**: Add a wake word detector (e.g., "Hey Robot") that only activates full Whisper transcription after the wake word is detected. This saves compute and prevents false activations.
+
+## Next Steps
+
+Continue to [Voice-to-Action](./voice-to-action) to learn how to parse transcribed speech into structured robot commands using NLU pipelines and LLM-based reasoning.

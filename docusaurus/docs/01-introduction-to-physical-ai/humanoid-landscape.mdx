@@ -1,0 +1,239 @@
+---
+sidebar_position: 3
+title: "Humanoid Robotics Landscape"
+description: "Overview of the current state of humanoid robotics industry and major players"
+---
+
+# Humanoid Robotics Landscape
+
+The humanoid robotics industry is experiencing unprecedented growth. This chapter surveys the major players, technologies, and trends shaping the future of humanoid robots.
+
+## Why Humanoid Form?
+
+Humanoid robots are designed with human-like form for several strategic reasons:
+
+1. **Human-Centric Environments** - Our world is built for human bodies
+2. **Abundant Training Data** - Vast datasets of human movement and interaction
+3. **Natural Interaction** - Humans intuitively understand humanoid gestures
+4. **Tool Compatibility** - Can use tools designed for humans
+
+```python
+# Humanoid robots can navigate human spaces
+class HumanoidAdvantages:
+    environments = [
+        "stairs",      # Designed for bipeds
+        "doorways",    # Sized for humans
+        "chairs",      # Made for sitting
+        "vehicles",    # Human-operated controls
+        "workstations" # Ergonomic for human form
+    ]
+    
+    tools = [
+        "screwdrivers",  # Designed for human hands
+        "keyboards",     # For human fingers
+        "steering_wheels" # For human arms
+    ]
+```
+
+## Major Industry Players
+
+### Boston Dynamics - Atlas
+
+**Atlas** represents the pinnacle of dynamic humanoid robotics:
+
+| Specification | Value |
+|--------------|-------|
+| **Height** | 1.5 m (4 ft 11 in) |
+| **Weight** | 89 kg (196 lb) |
+| **DOF** | 28 degrees of freedom |
+| **Actuation** | Hydraulic + Electric (latest) |
+| **Price** | ~$150,000+ (not commercially available) |
+
+**Key Capabilities**:
+- Parkour and dynamic movements
+- Backflips and jumps
+- Object manipulation
+- Self-recovery from falls
+
+### Tesla - Optimus
+
+**Optimus** (Tesla Bot) aims for mass-market production:
+
+| Specification | Value |
+|--------------|-------|
+| **Height** | 1.73 m (5 ft 8 in) |
+| **Weight** | 57 kg (125 lb) |
+| **DOF** | 28 degrees of freedom |
+| **Actuation** | Electric (all-electric) |
+| **Target Price** | $20,000 - $30,000 |
+
+**Design Philosophy**:
+- Cost-effective manufacturing
+- Leverage Tesla's AI and battery expertise
+- Focus on practical, repetitive tasks
+
+```python
+# Tesla's approach: Optimization for manufacturing
+class TeslaOptimus:
+    def __init__(self):
+        self.actuators = "custom_electric_linear_actuators"
+        self.compute = "tesla_fsd_computer"  # Same as vehicles
+        self.battery = "tesla_cells"
+        
+    def design_priorities(self):
+        return [
+            "manufacturability",
+            "cost_reduction", 
+            "energy_efficiency",
+            "safety"
+        ]
+```
+
+### Unitree - G1 and H1
+
+**Unitree** offers accessible research and commercial platforms:
+
+| Model | G1 | H1 |
+|-------|-----|-----|
+| **Height** | 1.27 m | 1.8 m |
+| **Weight** | 35 kg | 47 kg |
+| **DOF** | 23-43 | 19 |
+| **Price** | ~$16,000 | ~$90,000 |
+| **Focus** | Research/Education | Commercial |
+
+**Key Features**:
+- Open SDK for development
+- ROS 2 integration
+- Imitation learning support
+- Affordable for educational institutions
+
+### Figure AI - Figure 01
+
+**Figure 01** combines advanced AI with humanoid form:
+
+| Specification | Value |
+|--------------|-------|
+| **Height** | 1.68 m (5 ft 6 in) |
+| **Weight** | 60 kg (132 lb) |
+| **DOF** | 42+ degrees of freedom |
+| **Focus** | General-purpose work |
+
+**Notable**: Partnership with OpenAI for language-guided actions.
+
+## Technology Comparison
+
+```
+Performance vs Cost Trade-offs:
+
+High Performance
+    │
+    │    ★ Boston Dynamics Atlas
+    │         (Research/Demo)
+    │
+    │              ★ Figure 01
+    │              (General Purpose)
+    │
+    │    ★ Unitree H1
+    │    (Commercial)
+    │
+    │         ★ Tesla Optimus
+    │         (Mass Market Goal)
+    │
+    │              ★ Unitree G1
+    │              (Education/Research)
+    │
+    └────────────────────────────────▶
+         $10k   $50k   $100k   $150k+
+                      Cost
+```
+
+## Key Technologies
+
+### 1. Actuation Systems
+
+| Type | Pros | Cons | Used By |
+|------|------|------|---------|
+| **Hydraulic** | High power density | Complex, leaks | Atlas (older) |
+| **Electric** | Clean, efficient | Lower power density | Optimus, Unitree |
+| **Quasi-Direct Drive** | Backdrivable | Custom design | Research platforms |
+| **SEA (Series Elastic)** | Compliant, safe | Added complexity | Some research bots |
+
+### 2. Sensing Suites
+
+Modern humanoids integrate multiple sensor types:
+
+```python
+class HumanoidSensorSuite:
+    # Proprioceptive (internal state)
+    joint_encoders = "position_and_velocity"
+    imu = "orientation_and_acceleration"
+    force_torque = "interaction_forces"
+    
+    # Exteroceptive (external world)
+    cameras = ["rgb", "depth", "stereo"]
+    lidar = "3d_point_clouds"
+    tactile = "contact_sensing"
+    
+    # Audio
+    microphones = "voice_commands_and_localization"
+```
+
+### 3. AI Systems
+
+The "brain" of modern humanoids:
+
+| Component | Function | Technology |
+|-----------|----------|------------|
+| **Perception** | Understanding environment | Computer Vision, SLAM |
+| **Planning** | Deciding actions | Motion Planning, LLMs |
+| **Control** | Executing movements | PID, MPC, RL |
+| **Learning** | Improving over time | Reinforcement Learning, Imitation |
+
+## Market Projections
+
+The humanoid robotics market is projected to grow significantly:
+
+- **2024**: ~$1.5 billion
+- **2030**: ~$38 billion (projected)
+- **CAGR**: ~65% growth rate
+
+### Key Market Segments
+
+1. **Manufacturing** - Assembly, quality inspection
+2. **Logistics** - Warehousing, last-mile delivery
+3. **Healthcare** - Elder care, rehabilitation
+4. **Retail** - Customer service, inventory
+5. **Research** - Platform for AI development
+
+## Challenges Ahead
+
+Despite progress, significant challenges remain:
+
+| Challenge | Current State | Goal |
+|-----------|--------------|------|
+| **Battery Life** | 1-4 hours | 8+ hours |
+| **Cost** | $16k - $150k+ | < $20k |
+| **Reliability** | Limited | 99.9% uptime |
+| **Dexterity** | Basic manipulation | Human-level |
+| **Autonomy** | Supervised | Fully autonomous |
+
+## Summary
+
+The humanoid robotics landscape is evolving rapidly:
+
+1. **Multiple approaches** - From hydraulic to all-electric
+2. **Cost reduction** - Prices dropping toward consumer levels
+3. **AI integration** - Language models enabling natural interaction
+4. **Market growth** - Significant investment and deployment
+
+## Exercises
+
+1. **Comparison**: Create a detailed comparison table of 3 humanoid robots including specifications, target markets, and unique features.
+
+2. **Analysis**: What factors do you think will be most important for humanoid robot adoption in manufacturing?
+
+3. **Research**: Find a humanoid robot not mentioned in this chapter and describe its unique characteristics.
+
+## Next Steps
+
+Continue to [Sensor Systems](./sensor-systems) to learn about the sensors that enable humanoid robots to perceive their environment.

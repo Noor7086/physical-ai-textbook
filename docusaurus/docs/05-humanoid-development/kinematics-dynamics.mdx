@@ -1,0 +1,848 @@
+---
+sidebar_position: 2
+title: "Kinematics and Dynamics"
+description: "Forward/inverse kinematics, DH parameters, Jacobians, and robot dynamics for humanoid robots"
+---
+
+# Kinematics and Dynamics
+
+Kinematics and dynamics are the mathematical languages of robot motion. **Kinematics** describes *where* a robot can move without considering forces, while **dynamics** describes *how* forces and torques cause that motion. Together, they are the foundation for every controller, planner, and simulator used in humanoid robotics.
+
+## Learning Objectives
+
+By the end of this chapter, you will be able to:
+
+1. **Represent** rigid-body transformations using homogeneous transformation matrices
+2. **Assign** Denavit-Hartenberg (DH) parameters to a serial kinematic chain
+3. **Compute** forward kinematics from joint angles to end-effector pose
+4. **Solve** inverse kinematics analytically and numerically
+5. **Derive** the geometric and analytical Jacobian
+6. **Formulate** equations of motion using the Lagrangian method
+7. **Apply** the recursive Newton-Euler algorithm for inverse dynamics
+
+---
+
+## Rigid-Body Transformations
+
+Every link of a robot is a rigid body. To describe the position and orientation of one link relative to another, we use **homogeneous transformation matrices**.
+
+A transformation matrix combines a 3x3 rotation matrix **R** and a 3x1 translation vector **p** into a single 4x4 matrix:
+
+```
+T = | R  p |
+    | 0  1 |
+```
+
+```python
+import numpy as np
+
+def homogeneous_transform(R, p):
+    """
+    Construct a 4x4 homogeneous transformation matrix.
+    
+    Parameters
+    ----------
+    R : np.ndarray, shape (3, 3)
+        Rotation matrix.
+    p : np.ndarray, shape (3,)
+        Translation vector.
+    
+    Returns
+    -------
+    T : np.ndarray, shape (4, 4)
+        Homogeneous transformation matrix.
+    """
+    T = np.eye(4)
+    T[:3, :3] = R
+    T[:3, 3] = p
+    return T
+
+def rotation_z(theta):
+    """Rotation matrix about the z-axis by angle theta (radians)."""
+    c, s = np.cos(theta), np.sin(theta)
+    return np.array([
+        [c, -s, 0],
+        [s,  c, 0],
+        [0,  0, 1]
+    ])
+
+def rotation_x(alpha):
+    """Rotation matrix about the x-axis by angle alpha (radians)."""
+    c, s = np.cos(alpha), np.sin(alpha)
+    return np.array([
+        [1,  0,  0],
+        [0,  c, -s],
+        [0,  s,  c]
+    ])
+
+# Example: rotate 90 degrees about z, then translate [1, 0, 0.5]
+R = rotation_z(np.pi / 2)
+p = np.array([1.0, 0.0, 0.5])
+T = homogeneous_transform(R, p)
+print("Transformation matrix:")
+print(np.round(T, 4))
+```
+
+### Composition of Transforms
+
+When frame B is described relative to frame A by transform T_AB, and frame C relative to B by T_BC, the pose of C in A is:
+
+```
+T_AC = T_AB @ T_BC
+```
+
+This composition rule is the basis of forward kinematics: chain together the transforms of each link.
+
+---
+
+## Denavit-Hartenberg (DH) Parameters
+
+The **Denavit-Hartenberg convention** provides a systematic way to attach coordinate frames to each link of a serial robot and describe the transform between consecutive frames using exactly four parameters.
+
+### The Four DH Parameters
+
+| Parameter | Symbol | Description |
+|-----------|--------|-------------|
+| **Link length** | a\_i | Distance along x\_i from z\_(i-1) to z\_i |
+| **Link twist** | alpha\_i | Angle about x\_i from z\_(i-1) to z\_i |
+| **Link offset** | d\_i | Distance along z\_(i-1) from x\_(i-1) to x\_i |
+| **Joint angle** | theta\_i | Angle about z\_(i-1) from x\_(i-1) to x\_i |
+
+For a **revolute** joint, theta_i is the variable. For a **prismatic** joint, d_i is the variable.
+
+### DH Transformation Matrix
+
+The transform from frame i-1 to frame i is:
+
+```python
+def dh_transform(theta, d, a, alpha):
+    """
+    Compute the DH transformation matrix from frame i-1 to frame i.
+    
+    Parameters
+    ----------
+    theta : float  - Joint angle (rad)
+    d     : float  - Link offset (m)
+    a     : float  - Link length (m)
+    alpha : float  - Link twist (rad)
+    
+    Returns
+    -------
+    T : np.ndarray, shape (4, 4)
+    """
+    ct, st = np.cos(theta), np.sin(theta)
+    ca, sa = np.cos(alpha), np.sin(alpha)
+    
+    return np.array([
+        [ct, -st * ca,  st * sa, a * ct],
+        [st,  ct * ca, -ct * sa, a * st],
+        [0,   sa,       ca,      d     ],
+        [0,   0,        0,       1     ]
+    ])
+```
+
+### Example: 3-DOF Planar Arm
+
+Consider a planar 3-link robot arm commonly used to illustrate kinematics principles. All joints are revolute and rotate about the z-axis. The links have lengths L1, L2, and L3.
+
+```python
+class PlanarArm3DOF:
+    """A 3-DOF planar robot arm using DH convention."""
+    
+    def __init__(self, L1=1.0, L2=0.8, L3=0.5):
+        self.link_lengths = [L1, L2, L3]
+        # DH parameters: (theta, d, a, alpha)
+        # theta is variable (joint angle), rest are fixed
+        self.dh_fixed = [
+            # d,   a,    alpha
+            (0.0, L1, 0.0),
+            (0.0, L2, 0.0),
+            (0.0, L3, 0.0),
+        ]
+    
+    def forward_kinematics(self, q):
+        """
+        Compute end-effector pose given joint angles.
+        
+        Parameters
+        ----------
+        q : array-like, shape (3,)
+            Joint angles in radians.
+        
+        Returns
+        -------
+        T : np.ndarray, shape (4, 4)
+            End-effector transformation in base frame.
+        """
+        T = np.eye(4)
+        for i in range(3):
+            d, a, alpha = self.dh_fixed[i]
+            T_i = dh_transform(q[i], d, a, alpha)
+            T = T @ T_i
+        return T
+    
+    def get_joint_positions(self, q):
+        """Return (x, y) positions of each joint for visualization."""
+        positions = [(0.0, 0.0)]
+        T = np.eye(4)
+        for i in range(3):
+            d, a, alpha = self.dh_fixed[i]
+            T_i = dh_transform(q[i], d, a, alpha)
+            T = T @ T_i
+            positions.append((T[0, 3], T[1, 3]))
+        return positions
+
+# Compute FK for a sample configuration
+arm = PlanarArm3DOF(L1=1.0, L2=0.8, L3=0.5)
+q = [np.pi / 6, -np.pi / 4, np.pi / 3]  # 30, -45, 60 degrees
+
+T_end = arm.forward_kinematics(q)
+print(f"End-effector position: x={T_end[0,3]:.4f}, y={T_end[1,3]:.4f}")
+print(f"End-effector orientation: {np.degrees(np.arctan2(T_end[1,0], T_end[0,0])):.2f} degrees")
+```
+
+### Visualizing the Arm
+
+```python
+import matplotlib.pyplot as plt
+
+def plot_arm(arm, q, title="Planar 3-DOF Arm"):
+    """Plot the arm configuration."""
+    positions = arm.get_joint_positions(q)
+    xs = [p[0] for p in positions]
+    ys = [p[1] for p in positions]
+    
+    fig, ax = plt.subplots(1, 1, figsize=(8, 8))
+    ax.plot(xs, ys, 'o-', linewidth=3, markersize=10, color='steelblue')
+    ax.plot(xs[0], ys[0], 's', markersize=14, color='black', label='Base')
+    ax.plot(xs[-1], ys[-1], '*', markersize=16, color='red', label='End-effector')
+    
+    ax.set_xlim(-2.5, 2.5)
+    ax.set_ylim(-2.5, 2.5)
+    ax.set_aspect('equal')
+    ax.grid(True, alpha=0.3)
+    ax.legend()
+    ax.set_title(title)
+    plt.show()
+
+plot_arm(arm, q)
+```
+
+---
+
+## Forward Kinematics (FK)
+
+Forward kinematics answers: **given joint angles q, where is the end-effector?**
+
+For an n-DOF serial chain, FK is the product of all DH transforms:
+
+```
+T_0n(q) = T_01(q1) * T_12(q2) * ... * T_{n-1,n}(qn)
+```
+
+The end-effector position is `T_0n[:3, 3]` and the orientation is `T_0n[:3, :3]`.
+
+### FK for a 6-DOF Manipulator Arm
+
+A humanoid arm typically has 7 DOF (3 shoulder + 1 elbow + 3 wrist), but let us start with a classic 6-DOF arm:
+
+```python
+class SixDOFArm:
+    """6-DOF robot arm with standard DH parameters."""
+    
+    def __init__(self):
+        # DH table: [d, a, alpha] for each joint
+        # Based on a simplified humanoid arm model
+        self.dh_params = [
+            # d (m),   a (m),   alpha (rad)
+            (0.340,   0.000,   -np.pi / 2),  # Joint 1: Shoulder yaw
+            (0.000,   0.350,    0.000),       # Joint 2: Shoulder pitch
+            (0.000,   0.000,   -np.pi / 2),  # Joint 3: Shoulder roll
+            (0.350,   0.000,    np.pi / 2),   # Joint 4: Elbow
+            (0.000,   0.000,   -np.pi / 2),  # Joint 5: Wrist pitch
+            (0.080,   0.000,    0.000),       # Joint 6: Wrist roll
+        ]
+        self.n_joints = 6
+    
+    def forward_kinematics(self, q):
+        """Compute end-effector transform for joint angles q."""
+        assert len(q) == self.n_joints
+        T = np.eye(4)
+        for i in range(self.n_joints):
+            d, a, alpha = self.dh_params[i]
+            T = T @ dh_transform(q[i], d, a, alpha)
+        return T
+    
+    def fk_all_frames(self, q):
+        """Return transforms for all intermediate frames (useful for Jacobian)."""
+        frames = [np.eye(4)]
+        T = np.eye(4)
+        for i in range(self.n_joints):
+            d, a, alpha = self.dh_params[i]
+            T = T @ dh_transform(q[i], d, a, alpha)
+            frames.append(T.copy())
+        return frames
+
+arm6 = SixDOFArm()
+q_home = np.zeros(6)
+T_home = arm6.forward_kinematics(q_home)
+print(f"Home position: {T_home[:3, 3]}")
+```
+
+---
+
+## Inverse Kinematics (IK)
+
+Inverse kinematics is the reverse problem: **given a desired end-effector pose, what joint angles achieve it?**
+
+IK is fundamentally harder than FK because:
+- Solutions may not exist (target outside workspace)
+- Solutions may not be unique (multiple configurations reach the same pose)
+- The mapping is nonlinear
+
+### Analytical IK (2-DOF Example)
+
+For simple kinematic chains, closed-form solutions exist. Consider a 2-link planar arm:
+
+```python
+def ik_2link(x, y, L1, L2):
+    """
+    Analytical inverse kinematics for a 2-link planar arm.
+    
+    Parameters
+    ----------
+    x, y : float  - Desired end-effector position
+    L1, L2 : float - Link lengths
+    
+    Returns
+    -------
+    solutions : list of (q1, q2) tuples, up to 2 solutions
+    """
+    d_sq = x**2 + y**2
+    d = np.sqrt(d_sq)
+    
+    # Check reachability
+    if d > L1 + L2 or d < abs(L1 - L2):
+        return []  # No solution
+    
+    # Cosine law for q2
+    cos_q2 = (d_sq - L1**2 - L2**2) / (2 * L1 * L2)
+    cos_q2 = np.clip(cos_q2, -1, 1)  # Numerical safety
+    
+    # Two solutions: elbow-up and elbow-down
+    solutions = []
+    for sign in [1, -1]:
+        q2 = sign * np.arccos(cos_q2)
+        
+        # Solve for q1
+        beta = np.arctan2(y, x)
+        psi = np.arctan2(L2 * np.sin(q2), L1 + L2 * np.cos(q2))
+        q1 = beta - psi
+        
+        solutions.append((q1, q2))
+    
+    return solutions
+
+# Example: reach the point (1.2, 0.6)
+solutions = ik_2link(1.2, 0.6, L1=1.0, L2=0.8)
+for i, (q1, q2) in enumerate(solutions):
+    print(f"Solution {i+1}: q1={np.degrees(q1):.2f} deg, q2={np.degrees(q2):.2f} deg")
+```
+
+### Numerical IK with the Jacobian
+
+For higher-DOF robots, we use iterative numerical methods. The most common approach uses the **Jacobian pseudo-inverse**:
+
+```
+delta_q = J_pinv @ delta_x
+```
+
+where delta_x is the task-space error and J_pinv is the Moore-Penrose pseudo-inverse of the Jacobian.
+
+```python
+def numerical_ik(arm, target_position, q_init=None, max_iter=200, tol=1e-4, alpha=0.5):
+    """
+    Numerical inverse kinematics using damped least squares.
+    
+    Parameters
+    ----------
+    arm : object with forward_kinematics(q) and geometric_jacobian(q) methods
+    target_position : np.ndarray, shape (3,)
+    q_init : np.ndarray, initial guess for joint angles
+    max_iter : int, maximum iterations
+    tol : float, position error tolerance (meters)
+    alpha : float, step size
+    
+    Returns
+    -------
+    q : np.ndarray, joint angles achieving the target
+    success : bool
+    """
+    n = arm.n_joints
+    q = q_init if q_init is not None else np.zeros(n)
+    damping = 0.01  # Damping factor for singularity robustness
+    
+    for iteration in range(max_iter):
+        # Current end-effector position
+        T_current = arm.forward_kinematics(q)
+        p_current = T_current[:3, 3]
+        
+        # Position error
+        error = target_position - p_current
+        error_norm = np.linalg.norm(error)
+        
+        if error_norm < tol:
+            print(f"IK converged in {iteration} iterations (error: {error_norm:.6f} m)")
+            return q, True
+        
+        # Compute Jacobian (position rows only: 3 x n)
+        J = compute_geometric_jacobian_position(arm, q)
+        
+        # Damped least squares (DLS) pseudo-inverse
+        # J_pinv = J^T (J J^T + lambda^2 I)^{-1}
+        JJT = J @ J.T + damping**2 * np.eye(3)
+        J_pinv = J.T @ np.linalg.inv(JJT)
+        
+        # Update joint angles
+        dq = alpha * J_pinv @ error
+        q = q + dq
+    
+    print(f"IK did not converge after {max_iter} iterations (error: {error_norm:.6f} m)")
+    return q, False
+```
+
+---
+
+## The Jacobian
+
+The **Jacobian** is the matrix that maps joint velocities to end-effector velocities. It is the single most important tool in robot kinematics.
+
+```
+v = J(q) * q_dot
+```
+
+where v is a 6x1 vector of linear and angular velocities, J is a 6xn matrix, and q_dot is the nx1 vector of joint velocities.
+
+### Geometric Jacobian
+
+For a serial chain with revolute joints, each column of the Jacobian corresponds to one joint:
+
+```python
+def compute_geometric_jacobian(arm, q):
+    """
+    Compute the 6 x n geometric Jacobian.
+    
+    For revolute joint i:
+        J_v_i = z_{i-1} x (p_n - p_{i-1})   (linear velocity)
+        J_w_i = z_{i-1}                       (angular velocity)
+    
+    Parameters
+    ----------
+    arm : robot arm with fk_all_frames(q) method
+    q : np.ndarray, joint angles
+    
+    Returns
+    -------
+    J : np.ndarray, shape (6, n)
+    """
+    frames = arm.fk_all_frames(q)
+    n = arm.n_joints
+    J = np.zeros((6, n))
+    
+    # End-effector position
+    p_n = frames[-1][:3, 3]
+    
+    for i in range(n):
+        # z-axis of frame i (joint axis)
+        z_i = frames[i][:3, 2]
+        # Origin of frame i
+        p_i = frames[i][:3, 3]
+        
+        # Linear velocity component: z_i x (p_n - p_i)
+        J[:3, i] = np.cross(z_i, p_n - p_i)
+        # Angular velocity component: z_i
+        J[3:, i] = z_i
+    
+    return J
+
+def compute_geometric_jacobian_position(arm, q):
+    """Return only the 3 x n linear velocity part of the Jacobian."""
+    J_full = compute_geometric_jacobian(arm, q)
+    return J_full[:3, :]
+```
+
+### Jacobian Applications
+
+| Application | How the Jacobian is Used |
+|-------------|--------------------------|
+| **Velocity control** | Map desired Cartesian velocity to joint velocities |
+| **Force mapping** | Map joint torques to end-effector wrench (via J^T) |
+| **Singularity analysis** | Detect configurations where DOF are lost |
+| **Manipulability** | Quantify how easily the arm can move in different directions |
+| **Numerical IK** | Iterative position control via pseudo-inverse |
+
+### Singularities
+
+A **singularity** occurs when the Jacobian loses rank. At a singularity, certain directions of end-effector motion become impossible.
+
+```python
+def analyze_manipulability(arm, q):
+    """
+    Compute the manipulability ellipsoid and index.
+    
+    Manipulability index w = sqrt(det(J * J^T))
+    When w = 0, the arm is at a singularity.
+    """
+    J = compute_geometric_jacobian_position(arm, q)
+    JJT = J @ J.T
+    
+    # Manipulability index
+    w = np.sqrt(max(0, np.linalg.det(JJT)))
+    
+    # Singular values reveal directional manipulability
+    U, sigma, Vt = np.linalg.svd(J)
+    
+    print(f"Manipulability index: {w:.6f}")
+    print(f"Singular values: {sigma}")
+    if w < 1e-6:
+        print("WARNING: Near singularity!")
+    
+    return w, sigma
+```
+
+---
+
+## Robot Dynamics
+
+While kinematics tells us about motion geometry, **dynamics** tells us about the forces and torques that cause motion. The equations of motion for a robot manipulator are:
+
+```
+M(q) * q_ddot + C(q, q_dot) * q_dot + g(q) = tau
+```
+
+where:
+- **M(q)** is the n x n mass (inertia) matrix
+- **C(q, q_dot)** captures Coriolis and centrifugal effects
+- **g(q)** is the gravity vector
+- **tau** is the vector of joint torques
+
+### Lagrangian Dynamics
+
+The Lagrangian method derives the equations of motion from energy. The Lagrangian is:
+
+```
+L = K - P
+```
+
+where K is kinetic energy and P is potential energy. The equations of motion follow from:
+
+```
+d/dt (dL/dq_dot) - dL/dq = tau
+```
+
+```python
+class TwoLinkDynamics:
+    """
+    Dynamics of a 2-link planar arm using the Lagrangian method.
+    
+    Parameters: link masses m1, m2; link lengths L1, L2;
+                distance to center of mass lc1, lc2;
+                link inertias I1, I2 about their CoM.
+    """
+    
+    def __init__(self, m1=5.0, m2=3.0, L1=1.0, L2=0.8, lc1=0.5, lc2=0.4,
+                 I1=0.4, I2=0.2, g=9.81):
+        self.m1, self.m2 = m1, m2
+        self.L1, self.L2 = L1, L2
+        self.lc1, self.lc2 = lc1, lc2
+        self.I1, self.I2 = I1, I2
+        self.g = g
+    
+    def mass_matrix(self, q):
+        """Compute the 2x2 mass matrix M(q)."""
+        q1, q2 = q
+        m1, m2 = self.m1, self.m2
+        L1, lc1, lc2 = self.L1, self.lc1, self.lc2
+        I1, I2 = self.I1, self.I2
+        
+        c2 = np.cos(q2)
+        
+        M11 = (m1 * lc1**2 + I1 + m2 * (L1**2 + lc2**2 + 2 * L1 * lc2 * c2) + I2)
+        M12 = m2 * (lc2**2 + L1 * lc2 * c2) + I2
+        M21 = M12
+        M22 = m2 * lc2**2 + I2
+        
+        return np.array([[M11, M12],
+                         [M21, M22]])
+    
+    def coriolis_matrix(self, q, q_dot):
+        """Compute the 2x2 Coriolis/centrifugal matrix C(q, q_dot)."""
+        q1, q2 = q
+        dq1, dq2 = q_dot
+        
+        h = self.m2 * self.L1 * self.lc2 * np.sin(q2)
+        
+        C = np.array([
+            [-h * dq2, -h * (dq1 + dq2)],
+            [ h * dq1,  0.0]
+        ])
+        return C
+    
+    def gravity_vector(self, q):
+        """Compute the 2x1 gravity vector g(q)."""
+        q1, q2 = q
+        m1, m2 = self.m1, self.m2
+        L1, lc1, lc2 = self.L1, self.lc1, self.lc2
+        g = self.g
+        
+        g1 = ((m1 * lc1 + m2 * L1) * g * np.cos(q1) +
+              m2 * lc2 * g * np.cos(q1 + q2))
+        g2 = m2 * lc2 * g * np.cos(q1 + q2)
+        
+        return np.array([g1, g2])
+    
+    def forward_dynamics(self, q, q_dot, tau):
+        """
+        Compute joint accelerations: q_ddot = M^{-1}(tau - C*q_dot - g)
+        
+        This is the equation you integrate to simulate the robot.
+        """
+        M = self.mass_matrix(q)
+        C = self.coriolis_matrix(q, q_dot)
+        g = self.gravity_vector(q)
+        
+        q_ddot = np.linalg.solve(M, tau - C @ q_dot - g)
+        return q_ddot
+    
+    def inverse_dynamics(self, q, q_dot, q_ddot):
+        """
+        Compute required torques: tau = M*q_ddot + C*q_dot + g
+        
+        This is used for computed torque control.
+        """
+        M = self.mass_matrix(q)
+        C = self.coriolis_matrix(q, q_dot)
+        g = self.gravity_vector(q)
+        
+        tau = M @ q_ddot + C @ q_dot + g
+        return tau
+```
+
+### Simulating the Dynamics
+
+```python
+from scipy.integrate import solve_ivp
+
+def simulate_arm(dynamics, q0, q_dot0, tau_func, t_span=(0, 5), dt=0.01):
+    """
+    Simulate the 2-link arm under a torque policy.
+    
+    Parameters
+    ----------
+    dynamics : TwoLinkDynamics instance
+    q0 : initial joint angles
+    q_dot0 : initial joint velocities
+    tau_func : callable(t, q, q_dot) -> torques
+    t_span : simulation interval
+    dt : time step for output
+    """
+    def state_derivative(t, state):
+        q = state[:2]
+        q_dot = state[2:]
+        tau = tau_func(t, q, q_dot)
+        q_ddot = dynamics.forward_dynamics(q, q_dot, tau)
+        return np.concatenate([q_dot, q_ddot])
+    
+    x0 = np.concatenate([q0, q_dot0])
+    t_eval = np.arange(t_span[0], t_span[1], dt)
+    
+    sol = solve_ivp(state_derivative, t_span, x0, t_eval=t_eval, method='RK45')
+    
+    return sol.t, sol.y[:2].T, sol.y[2:].T  # times, positions, velocities
+
+# Example: gravity compensation (hold position)
+dyn = TwoLinkDynamics()
+q0 = np.array([np.pi / 4, np.pi / 6])
+q_dot0 = np.zeros(2)
+
+def gravity_compensation(t, q, q_dot):
+    """Apply only gravity-compensating torques."""
+    return dyn.gravity_vector(q)
+
+times, positions, velocities = simulate_arm(
+    dyn, q0, q_dot0, gravity_compensation, t_span=(0, 3)
+)
+print(f"Final position: {np.degrees(positions[-1])} degrees")
+print(f"Position change: {np.degrees(positions[-1] - q0)} degrees (should be ~0)")
+```
+
+### Newton-Euler Recursive Algorithm
+
+The **Newton-Euler** method computes inverse dynamics recursively, which is more efficient than the Lagrangian method for robots with many joints (O(n) vs O(n^3)):
+
+```python
+def newton_euler_inverse_dynamics(n_joints, q, q_dot, q_ddot,
+                                   dh_params, link_masses, link_inertias,
+                                   link_com_positions, gravity=np.array([0, 0, -9.81])):
+    """
+    Recursive Newton-Euler inverse dynamics (simplified outline).
+    
+    Forward pass: propagate velocities and accelerations from base to tip.
+    Backward pass: propagate forces and torques from tip to base.
+    
+    Parameters
+    ----------
+    n_joints : int
+    q, q_dot, q_ddot : joint angles, velocities, accelerations
+    dh_params : list of (d, a, alpha) for each joint
+    link_masses : list of masses
+    link_inertias : list of 3x3 inertia tensors
+    link_com_positions : list of CoM positions in link frames
+    gravity : gravitational acceleration in base frame
+    
+    Returns
+    -------
+    tau : np.ndarray, shape (n_joints,), required joint torques
+    """
+    # Initialize
+    omega = [np.zeros(3)]  # Angular velocities
+    alpha_ang = [np.zeros(3)]  # Angular accelerations
+    a_lin = [-gravity]  # Linear accelerations (start with -gravity)
+    
+    # --- Forward Pass (base to tip) ---
+    for i in range(n_joints):
+        # Get rotation and position from DH
+        d, a, alp = dh_params[i]
+        T_i = dh_transform(q[i], d, a, alp)
+        R_i = T_i[:3, :3]
+        p_i = T_i[:3, 3]
+        
+        z_i = np.array([0, 0, 1])  # Joint axis in local frame
+        
+        # Propagate angular velocity
+        omega_i = R_i.T @ omega[-1] + z_i * q_dot[i]
+        omega.append(omega_i)
+        
+        # Propagate angular acceleration
+        alpha_i = R_i.T @ alpha_ang[-1] + z_i * q_ddot[i] + np.cross(omega_i, z_i * q_dot[i])
+        alpha_ang.append(alpha_i)
+        
+        # Propagate linear acceleration
+        a_i = R_i.T @ (a_lin[-1] + np.cross(alpha_ang[-2], p_i) +
+                        np.cross(omega[-2], np.cross(omega[-2], p_i)))
+        a_lin.append(a_i)
+    
+    # --- Backward Pass (tip to base) ---
+    f = [np.zeros(3)] * (n_joints + 2)  # Forces
+    n_torque = [np.zeros(3)] * (n_joints + 2)  # Torques
+    tau = np.zeros(n_joints)
+    
+    for i in range(n_joints, 0, -1):
+        m_i = link_masses[i - 1]
+        I_i = link_inertias[i - 1]
+        pc_i = link_com_positions[i - 1]
+        
+        # Force on link i
+        F_i = m_i * (a_lin[i] + np.cross(alpha_ang[i], pc_i) +
+                      np.cross(omega[i], np.cross(omega[i], pc_i)))
+        N_i = I_i @ alpha_ang[i] + np.cross(omega[i], I_i @ omega[i])
+        
+        # Propagate backward (simplified)
+        d, a, alp = dh_params[i - 1] if i < n_joints else (0, 0, 0)
+        
+        f[i] = F_i + f[i + 1]
+        n_torque[i] = N_i + n_torque[i + 1] + np.cross(pc_i, F_i)
+        
+        # Joint torque is the z-component of the torque
+        z_i = np.array([0, 0, 1])
+        tau[i - 1] = n_torque[i] @ z_i
+    
+    return tau
+```
+
+---
+
+## Computed Torque Control
+
+A classic model-based controller that uses inverse dynamics to cancel the nonlinear dynamics, reducing the control problem to a set of decoupled linear systems:
+
+```python
+class ComputedTorqueController:
+    """
+    Computed torque (inverse dynamics) control for trajectory tracking.
+    
+    tau = M(q) * (q_ddot_des + Kv * e_dot + Kp * e) + C(q, q_dot) * q_dot + g(q)
+    
+    where e = q_des - q is the tracking error.
+    """
+    
+    def __init__(self, dynamics, Kp, Kv):
+        self.dynamics = dynamics
+        self.Kp = np.diag(Kp) if np.ndim(Kp) == 1 else Kp
+        self.Kv = np.diag(Kv) if np.ndim(Kv) == 1 else Kv
+    
+    def compute_torque(self, q, q_dot, q_des, q_dot_des, q_ddot_des):
+        """Compute the control torques."""
+        e = q_des - q
+        e_dot = q_dot_des - q_dot
+        
+        # Desired acceleration with PD correction
+        q_ddot_cmd = q_ddot_des + self.Kv @ e_dot + self.Kp @ e
+        
+        # Inverse dynamics to get torques
+        tau = self.dynamics.inverse_dynamics(q, q_dot, q_ddot_cmd)
+        return tau
+
+# Example usage
+dyn = TwoLinkDynamics()
+controller = ComputedTorqueController(
+    dynamics=dyn,
+    Kp=[100.0, 100.0],   # Position gains
+    Kv=[20.0, 20.0]      # Velocity gains (critically damped: Kv = 2*sqrt(Kp))
+)
+
+# Track a desired configuration
+q_current = np.array([0.0, 0.0])
+q_dot_current = np.array([0.0, 0.0])
+q_desired = np.array([np.pi / 4, np.pi / 3])
+q_dot_desired = np.zeros(2)
+q_ddot_desired = np.zeros(2)
+
+tau = controller.compute_torque(
+    q_current, q_dot_current, q_desired, q_dot_desired, q_ddot_desired
+)
+print(f"Computed torques: {tau} Nm")
+```
+
+---
+
+## Summary
+
+| Topic | Key Concept |
+|-------|-------------|
+| **Rigid-body transforms** | 4x4 homogeneous matrices compose via multiplication |
+| **DH convention** | Four parameters (theta, d, a, alpha) fully describe each joint |
+| **Forward kinematics** | Chain of DH transforms maps joint angles to end-effector pose |
+| **Inverse kinematics** | Analytical for simple chains; numerical (Jacobian-based) for general robots |
+| **Jacobian** | Maps joint velocities to task-space velocities; key for IK, control, singularity analysis |
+| **Lagrangian dynamics** | Energy-based derivation of M(q)*q_ddot + C*q_dot + g = tau |
+| **Newton-Euler** | Recursive O(n) inverse dynamics algorithm |
+| **Computed torque** | Model-based controller that linearizes the dynamics |
+
+## Exercises
+
+1. **DH Parameters**: Assign DH parameters to a 4-DOF SCARA robot and implement its FK in Python.
+
+2. **Workspace Visualization**: Generate a plot of the reachable workspace for the 3-DOF planar arm by sampling 10,000 random joint configurations and plotting the end-effector positions.
+
+3. **Numerical IK**: Implement the damped least-squares IK solver for the 6-DOF arm. Test with targets inside and outside the workspace. Measure convergence rate.
+
+4. **Jacobian Singularity**: Find configurations of the 3-DOF planar arm where the Jacobian is singular. Verify by computing the manipulability index.
+
+5. **Dynamics Simulation**: Simulate the 2-link arm falling under gravity (zero torques) from an initial horizontal configuration. Plot joint angles and velocities over time.
+
+6. **Computed Torque Tracking**: Implement a computed torque controller for the 2-link arm tracking a sinusoidal trajectory. Plot tracking error over time.
+
+## Next Steps
+
+Continue to [Bipedal Locomotion](./bipedal-locomotion) to learn how these kinematics and dynamics principles are applied to make humanoid robots walk.

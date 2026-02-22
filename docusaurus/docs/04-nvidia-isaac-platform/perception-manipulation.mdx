@@ -1,0 +1,841 @@
+---
+sidebar_position: 3
+title: "Perception and Manipulation"
+description: "Using NVIDIA Isaac for synthetic data generation, domain randomization, perception training, and robotic manipulation planning"
+---
+
+# Perception and Manipulation in Isaac
+
+One of the most powerful capabilities of NVIDIA Isaac is its ability to generate **photorealistic synthetic data** at scale and simulate **complex manipulation tasks** with physically accurate contact dynamics. This chapter explores how to leverage these capabilities to train perception models and develop manipulation strategies for humanoid robots.
+
+## Learning Objectives
+
+By the end of this chapter, you will be able to:
+
+1. **Generate synthetic training data** using Isaac Sim's Replicator framework
+2. **Apply domain randomization** to improve model generalization
+3. **Simulate cameras and depth sensors** with physically accurate noise models
+4. **Train object detection models** on synthetic data that transfers to real sensors
+5. **Implement grasp planning** algorithms in simulation
+6. **Design manipulation task environments** for training and evaluation
+
+## The Synthetic Data Advantage
+
+Training perception models for robotics traditionally requires collecting and labeling thousands of real-world images -- a slow, expensive process. Synthetic data generated in simulation offers a compelling alternative:
+
+| Aspect | Real Data | Synthetic Data (Isaac) |
+|---|---|---|
+| **Collection Speed** | Hours per 1,000 images | Seconds per 1,000 images |
+| **Labeling** | Manual, error-prone | Automatic, pixel-perfect |
+| **Label Types** | Limited by annotator | Bounding boxes, segmentation, depth, normals, poses |
+| **Diversity** | Limited by physical setup | Unlimited variations via randomization |
+| **Cost** | $0.10-$1.00 per label | ~$0.001 per label (compute only) |
+| **Edge Cases** | Rare, hard to capture | Easy to generate programmatically |
+
+### How Synthetic Data Works in Isaac
+
+```
+┌──────────────────────────────────────────────────────────┐
+│                    Isaac Replicator                        │
+│                                                          │
+│  ┌──────────┐   ┌──────────────┐   ┌─────────────────┐ │
+│  │ 3D Scene │──▶│ Randomization │──▶│ RTX Rendering   │ │
+│  │ (USD)    │   │ Engine        │   │ (Photorealistic) │ │
+│  └──────────┘   └──────────────┘   └─────────────────┘ │
+│                                           │              │
+│                                           ▼              │
+│                  ┌────────────────────────────────────┐  │
+│                  │ Annotator Pipeline                 │  │
+│                  │ RGB | Depth | Segmentation | Poses │  │
+│                  │ Bounding Boxes | Normals | Optical │  │
+│                  │ Flow | Occlusion                   │  │
+│                  └────────────────────────────────────┘  │
+│                                           │              │
+│                                           ▼              │
+│                  ┌────────────────────────────────────┐  │
+│                  │ Writer (COCO, KITTI, Custom)       │  │
+│                  └────────────────────────────────────┘  │
+└──────────────────────────────────────────────────────────┘
+```
+
+## Setting Up Isaac Replicator
+
+**Isaac Replicator** is the synthetic data generation (SDG) framework built into Isaac Sim. It provides a Python API for randomizing scenes and capturing annotated data.
+
+### Basic Replicator Pipeline
+
+```python
+from isaacsim import SimulationApp
+simulation_app = SimulationApp({"headless": True})
+
+import omni.replicator.core as rep
+from omni.isaac.core import World
+
+# Create the simulation world
+world = World()
+
+# Define the camera
+camera = rep.create.camera(
+    position=(1.5, 0.0, 1.2),
+    look_at=(0.0, 0.0, 0.5),
+    focal_length=24.0,
+    f_stop=2.0,
+)
+
+# Create a render product (what the camera sees)
+render_product = rep.create.render_product(camera, resolution=(1024, 768))
+
+# Attach annotators for different label types
+rgb_annotator = rep.AnnotatorRegistry.get_annotator("rgb")
+depth_annotator = rep.AnnotatorRegistry.get_annotator("distance_to_image_plane")
+bbox_2d_annotator = rep.AnnotatorRegistry.get_annotator("bounding_box_2d_tight")
+semantic_annotator = rep.AnnotatorRegistry.get_annotator("semantic_segmentation")
+instance_annotator = rep.AnnotatorRegistry.get_annotator("instance_segmentation")
+
+rgb_annotator.attach([render_product])
+depth_annotator.attach([render_product])
+bbox_2d_annotator.attach([render_product])
+semantic_annotator.attach([render_product])
+instance_annotator.attach([render_product])
+
+# Set up a COCO-format writer for training data
+writer = rep.WriterRegistry.get("BasicWriter")
+writer.initialize(
+    output_dir="/tmp/synthetic_data/",
+    rgb=True,
+    bounding_box_2d_tight=True,
+    semantic_segmentation=True,
+    distance_to_image_plane=True,
+    instance_segmentation=True,
+)
+writer.attach([render_product])
+
+print("Replicator pipeline configured.")
+```
+
+### Populating a Scene with Objects
+
+```python
+import omni.replicator.core as rep
+
+# Create a table surface
+table = rep.create.cube(
+    position=(0.0, 0.0, 0.4),
+    scale=(0.8, 0.6, 0.02),
+    semantics=[("class", "table")],
+)
+
+# Create manipulable objects with semantic labels
+def create_objects():
+    """Create a set of common household objects for manipulation training."""
+    objects = []
+
+    # Bottles
+    for i in range(3):
+        bottle = rep.create.cylinder(
+            position=(0.0, 0.0, 0.5),
+            scale=(0.03, 0.03, 0.1),
+            semantics=[("class", "bottle")],
+        )
+        objects.append(bottle)
+
+    # Boxes
+    for i in range(3):
+        box = rep.create.cube(
+            position=(0.0, 0.0, 0.5),
+            scale=(0.05, 0.05, 0.05),
+            semantics=[("class", "box")],
+        )
+        objects.append(box)
+
+    # Spherical fruits
+    for i in range(3):
+        fruit = rep.create.sphere(
+            position=(0.0, 0.0, 0.5),
+            scale=(0.04, 0.04, 0.04),
+            semantics=[("class", "fruit")],
+        )
+        objects.append(fruit)
+
+    return objects
+
+objects = create_objects()
+```
+
+## Domain Randomization
+
+**Domain randomization** is the technique of varying simulation parameters so that trained models generalize to the real world. The idea is that if a model can handle extreme variation in simulation, real-world conditions will fall within the training distribution.
+
+### Types of Randomization
+
+| Randomization Type | What Changes | Purpose |
+|---|---|---|
+| **Visual** | Textures, colors, lighting | Robustness to appearance |
+| **Geometric** | Object positions, orientations, sizes | Robustness to spatial variation |
+| **Physical** | Mass, friction, restitution | Robustness to physical properties |
+| **Camera** | Position, orientation, intrinsics | Robustness to viewpoint |
+| **Distractor** | Background objects, clutter | Robustness to irrelevant stimuli |
+
+### Implementing Domain Randomization
+
+```python
+import omni.replicator.core as rep
+
+# Define randomization graph
+with rep.trigger.on_frame(num_frames=10000):
+    # Randomize object positions on the table
+    with rep.get.prims(semantics=[("class", "bottle"),
+                                    ("class", "box"),
+                                    ("class", "fruit")]):
+        rep.randomizer.scatter_2d(
+            surface_prims=[table],
+            check_for_collisions=True,
+        )
+        # Random rotations
+        rep.modify.pose(
+            rotation=rep.distribution.uniform(
+                (-180, -30, -180),
+                (180, 30, 180),
+            )
+        )
+
+    # Randomize object materials/textures
+    with rep.get.prims(semantics=[("class", "bottle")]):
+        rep.randomizer.materials(
+            materials=rep.create.material_omnipbr(
+                diffuse=rep.distribution.uniform((0.1, 0.1, 0.1), (1.0, 1.0, 1.0)),
+                roughness=rep.distribution.uniform(0.0, 1.0),
+                metallic=rep.distribution.choice([0.0, 0.5, 1.0]),
+            )
+        )
+
+    # Randomize lighting
+    with rep.get.prims(path_pattern="/World/Lights/.*"):
+        rep.modify.attribute(
+            "intensity",
+            rep.distribution.uniform(500, 5000),
+        )
+        rep.modify.pose(
+            position=rep.distribution.uniform((-3, -3, 2), (3, 3, 5)),
+        )
+
+    # Randomize camera position (small perturbations)
+    with camera:
+        rep.modify.pose(
+            position=rep.distribution.uniform(
+                (1.2, -0.3, 1.0),
+                (1.8, 0.3, 1.5),
+            ),
+            look_at=(0.0, 0.0, 0.5),
+        )
+```
+
+### Generating the Dataset
+
+```python
+import omni.replicator.core as rep
+
+# Run the randomization and capture pipeline
+rep.orchestrator.run()
+
+# The pipeline will:
+# 1. For each of the 10,000 frames:
+#    a. Apply all randomizations
+#    b. Render the scene with RTX
+#    c. Extract all annotations (RGB, depth, bboxes, segmentation)
+#    d. Write to disk in COCO format
+
+print("Dataset generation complete!")
+print("Output directory: /tmp/synthetic_data/")
+```
+
+### Dataset Statistics Verification
+
+```python
+import json
+import os
+from pathlib import Path
+
+output_dir = Path("/tmp/synthetic_data/")
+
+# Count generated images
+rgb_images = list(output_dir.glob("rgb/*.png"))
+print(f"Generated {len(rgb_images)} RGB images")
+
+# Load and inspect COCO annotations
+with open(output_dir / "bounding_box_2d_tight" / "annotations.json") as f:
+    coco_data = json.load(f)
+
+categories = {c["id"]: c["name"] for c in coco_data["categories"]}
+print(f"Categories: {categories}")
+
+# Count annotations per category
+from collections import Counter
+cat_counts = Counter()
+for ann in coco_data["annotations"]:
+    cat_counts[categories[ann["category_id"]]] += 1
+
+print("\nAnnotation counts per category:")
+for cat, count in cat_counts.most_common():
+    print(f"  {cat}: {count}")
+```
+
+## Camera and Sensor Simulation
+
+Isaac Sim provides physically accurate camera simulation, including realistic noise models that mimic real sensor behavior.
+
+### RGB-D Camera Configuration
+
+```python
+from omni.isaac.sensor import Camera
+import numpy as np
+
+# Create a wrist-mounted camera (common for manipulation)
+wrist_camera = Camera(
+    prim_path="/World/Robot/wrist_link/WristCamera",
+    frequency=30,
+    resolution=(640, 480),
+)
+
+# Configure camera intrinsics
+wrist_camera.set_focal_length(3.67)       # mm (typical for industrial cameras)
+wrist_camera.set_focus_distance(0.5)       # 50cm focus
+wrist_camera.set_horizontal_aperture(4.89) # mm
+wrist_camera.set_clipping_range(0.01, 5.0) # Near/far clip planes
+
+wrist_camera.initialize()
+
+# Enable depth and other outputs
+wrist_camera.add_distance_to_image_plane_to_frame()
+wrist_camera.add_normals_to_frame()
+wrist_camera.add_instance_segmentation_to_frame()
+
+# Capture sensor data during simulation
+world.reset()
+for step in range(300):
+    world.step(render=True)
+
+    if step % 30 == 0:  # Every second at 30 Hz
+        # Get RGB image [H, W, 4] (RGBA)
+        rgba = wrist_camera.get_rgba()
+        rgb = rgba[:, :, :3]
+
+        # Get depth image [H, W] (meters)
+        depth = wrist_camera.get_depth()
+
+        # Get surface normals [H, W, 3]
+        normals = wrist_camera.get_normals()
+
+        # Get instance segmentation
+        seg = wrist_camera.get_instance_segmentation()
+
+        print(f"Step {step}:")
+        print(f"  RGB: {rgb.shape}, dtype={rgb.dtype}")
+        print(f"  Depth: min={depth.min():.3f}m, max={depth.max():.3f}m")
+        print(f"  Unique instances: {np.unique(seg).shape[0]}")
+```
+
+### Adding Realistic Sensor Noise
+
+```python
+# Post-processing to add realistic depth sensor noise
+def add_depth_noise(depth_image, noise_params):
+    """Add realistic noise to simulated depth images.
+
+    Models noise characteristics of common depth sensors like
+    Intel RealSense D435 or Microsoft Azure Kinect.
+    """
+    noisy_depth = depth_image.copy()
+
+    # 1. Gaussian noise (increases with distance)
+    distance_factor = depth_image / noise_params["max_range"]
+    gaussian_noise = np.random.normal(
+        0,
+        noise_params["gaussian_sigma"] * (1 + distance_factor * 3),
+        depth_image.shape,
+    )
+    noisy_depth += gaussian_noise
+
+    # 2. Quantization noise (depth sensor resolution)
+    resolution = noise_params["depth_resolution"]
+    noisy_depth = np.round(noisy_depth / resolution) * resolution
+
+    # 3. Missing data (holes at edges and transparent surfaces)
+    # Simulate dropout based on surface angle
+    dropout_mask = np.random.random(depth_image.shape) < noise_params["dropout_rate"]
+    noisy_depth[dropout_mask] = 0.0
+
+    # 4. Max range clipping
+    noisy_depth[noisy_depth > noise_params["max_range"]] = 0.0
+    noisy_depth[noisy_depth < noise_params["min_range"]] = 0.0
+
+    return noisy_depth
+
+
+# Typical noise parameters for Intel RealSense D435
+realsense_noise = {
+    "gaussian_sigma": 0.002,    # 2mm base noise
+    "depth_resolution": 0.001,  # 1mm quantization
+    "dropout_rate": 0.01,       # 1% pixel dropout
+    "max_range": 3.0,           # 3m max range
+    "min_range": 0.1,           # 10cm min range
+}
+
+noisy_depth = add_depth_noise(depth, realsense_noise)
+```
+
+## Training Object Detection on Synthetic Data
+
+With a generated dataset, we can train object detection models for robotic manipulation.
+
+### Preparing Data for Training
+
+```python
+import torch
+from torch.utils.data import Dataset, DataLoader
+from torchvision import transforms
+from PIL import Image
+import json
+
+class SyntheticObjectDataset(Dataset):
+    """PyTorch dataset for synthetic data generated by Isaac Replicator."""
+
+    def __init__(self, data_dir, split="train", transform=None):
+        self.data_dir = Path(data_dir)
+        self.transform = transform or transforms.Compose([
+            transforms.Resize((640, 640)),
+            transforms.ToTensor(),
+            transforms.Normalize(
+                mean=[0.485, 0.456, 0.406],
+                std=[0.229, 0.224, 0.225],
+            ),
+        ])
+
+        # Load COCO annotations
+        ann_file = self.data_dir / "bounding_box_2d_tight" / "annotations.json"
+        with open(ann_file) as f:
+            self.coco = json.load(f)
+
+        # Build image-to-annotations mapping
+        self.img_to_anns = {}
+        for ann in self.coco["annotations"]:
+            img_id = ann["image_id"]
+            if img_id not in self.img_to_anns:
+                self.img_to_anns[img_id] = []
+            self.img_to_anns[img_id].append(ann)
+
+        # Split into train/val
+        all_images = self.coco["images"]
+        split_idx = int(len(all_images) * 0.9)
+        if split == "train":
+            self.images = all_images[:split_idx]
+        else:
+            self.images = all_images[split_idx:]
+
+    def __len__(self):
+        return len(self.images)
+
+    def __getitem__(self, idx):
+        img_info = self.images[idx]
+        img_path = self.data_dir / "rgb" / img_info["file_name"]
+        image = Image.open(img_path).convert("RGB")
+
+        # Get annotations for this image
+        anns = self.img_to_anns.get(img_info["id"], [])
+
+        boxes = []
+        labels = []
+        for ann in anns:
+            x, y, w, h = ann["bbox"]
+            boxes.append([x, y, x + w, y + h])
+            labels.append(ann["category_id"])
+
+        target = {
+            "boxes": torch.tensor(boxes, dtype=torch.float32),
+            "labels": torch.tensor(labels, dtype=torch.int64),
+        }
+
+        if self.transform:
+            image = self.transform(image)
+
+        return image, target
+
+
+# Create data loaders
+train_dataset = SyntheticObjectDataset("/tmp/synthetic_data/", split="train")
+val_dataset = SyntheticObjectDataset("/tmp/synthetic_data/", split="val")
+
+train_loader = DataLoader(train_dataset, batch_size=16, shuffle=True, num_workers=4)
+val_loader = DataLoader(val_dataset, batch_size=16, shuffle=False, num_workers=4)
+
+print(f"Training samples: {len(train_dataset)}")
+print(f"Validation samples: {len(val_dataset)}")
+```
+
+### Fine-Tuning a Detection Model
+
+```python
+import torchvision
+from torchvision.models.detection import fasterrcnn_resnet50_fpn_v2
+from torchvision.models.detection.faster_rcnn import FastRCNNPredictor
+
+def create_detection_model(num_classes):
+    """Create a Faster R-CNN model for object detection."""
+    # Load pretrained model
+    model = fasterrcnn_resnet50_fpn_v2(weights="DEFAULT")
+
+    # Replace the classification head for our number of classes
+    in_features = model.roi_heads.box_predictor.cls_score.in_features
+    model.roi_heads.box_predictor = FastRCNNPredictor(in_features, num_classes)
+
+    return model
+
+# Number of classes: background + bottle + box + fruit
+num_classes = 4
+model = create_detection_model(num_classes)
+model = model.to("cuda")
+
+# Training loop
+optimizer = torch.optim.SGD(
+    model.parameters(), lr=0.005, momentum=0.9, weight_decay=0.0005
+)
+lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=3, gamma=0.1)
+
+num_epochs = 10
+for epoch in range(num_epochs):
+    model.train()
+    epoch_loss = 0.0
+
+    for images, targets in train_loader:
+        images = [img.to("cuda") for img in images]
+        targets = [{k: v.to("cuda") for k, v in t.items()} for t in targets]
+
+        loss_dict = model(images, targets)
+        losses = sum(loss for loss in loss_dict.values())
+
+        optimizer.zero_grad()
+        losses.backward()
+        optimizer.step()
+
+        epoch_loss += losses.item()
+
+    lr_scheduler.step()
+    avg_loss = epoch_loss / len(train_loader)
+    print(f"Epoch {epoch+1}/{num_epochs}, Loss: {avg_loss:.4f}")
+
+print("Training complete!")
+```
+
+## Grasp Planning in Simulation
+
+Isaac Sim's accurate contact physics makes it an ideal platform for developing and testing grasp strategies.
+
+### Analytical Grasp Generation
+
+```python
+import numpy as np
+from scipy.spatial.transform import Rotation
+
+class GraspPlanner:
+    """Generates and evaluates grasp candidates for objects in simulation."""
+
+    def __init__(self, gripper_width=0.08, gripper_depth=0.05):
+        self.gripper_width = gripper_width
+        self.gripper_depth = gripper_depth
+
+    def generate_antipodal_grasps(self, object_pose, object_size, num_candidates=100):
+        """Generate antipodal grasp candidates around an object.
+
+        Antipodal grasps apply opposing forces through the object's
+        center of mass, providing stable force closure.
+        """
+        grasps = []
+        obj_pos = np.array(object_pose[:3])
+        obj_half = np.array(object_size) / 2.0
+
+        for _ in range(num_candidates):
+            # Random approach direction on the upper hemisphere
+            theta = np.random.uniform(0, 2 * np.pi)
+            phi = np.random.uniform(0, np.pi / 3)  # Top 60 degrees
+
+            # Approach direction vector
+            approach = np.array([
+                np.sin(phi) * np.cos(theta),
+                np.sin(phi) * np.sin(theta),
+                -np.cos(phi),  # Pointing downward
+            ])
+
+            # Grasp position: offset from object center along approach
+            standoff = 0.05  # 5cm standoff distance
+            grasp_pos = obj_pos - approach * standoff
+
+            # Random rotation around approach axis
+            roll = np.random.uniform(0, np.pi)
+            rotation = self._approach_to_rotation(approach, roll)
+
+            # Check kinematic feasibility
+            if self._is_feasible(grasp_pos, obj_pos, obj_half):
+                grasps.append({
+                    "position": grasp_pos,
+                    "orientation": rotation,
+                    "approach": approach,
+                    "score": self._score_grasp(approach, obj_half),
+                })
+
+        # Sort by score (higher is better)
+        grasps.sort(key=lambda g: g["score"], reverse=True)
+        return grasps
+
+    def _approach_to_rotation(self, approach, roll):
+        """Convert approach vector and roll to rotation matrix."""
+        z_axis = -approach / np.linalg.norm(approach)
+        x_axis = np.cross([0, 0, 1], z_axis)
+        if np.linalg.norm(x_axis) < 1e-6:
+            x_axis = np.cross([0, 1, 0], z_axis)
+        x_axis /= np.linalg.norm(x_axis)
+        y_axis = np.cross(z_axis, x_axis)
+
+        rot_matrix = np.column_stack([x_axis, y_axis, z_axis])
+        roll_rot = Rotation.from_rotvec(roll * z_axis).as_matrix()
+        return (roll_rot @ rot_matrix).tolist()
+
+    def _is_feasible(self, grasp_pos, obj_pos, obj_half):
+        """Check if grasp position is kinematically reachable."""
+        dist = np.linalg.norm(grasp_pos - obj_pos)
+        return 0.02 < dist < 0.15  # Between 2cm and 15cm from object
+
+    def _score_grasp(self, approach, obj_half):
+        """Score grasp quality based on approach direction and object geometry."""
+        # Prefer top-down grasps (more stable)
+        verticality = abs(approach[2])
+        # Prefer grasping along shorter object dimension
+        alignment = 1.0 - abs(np.dot(approach, obj_half / np.linalg.norm(obj_half)))
+        return 0.6 * verticality + 0.4 * alignment
+
+
+# Generate grasps for detected objects
+planner = GraspPlanner(gripper_width=0.08)
+object_pose = [0.5, 0.0, 0.45, 0.0, 0.0, 0.0, 1.0]  # [x, y, z, qx, qy, qz, qw]
+object_size = [0.05, 0.05, 0.10]  # 5cm x 5cm x 10cm box
+
+grasps = planner.generate_antipodal_grasps(object_pose, object_size, num_candidates=200)
+print(f"Generated {len(grasps)} feasible grasps")
+print(f"Top grasp score: {grasps[0]['score']:.3f}")
+print(f"Top grasp position: {grasps[0]['position']}")
+```
+
+### Evaluating Grasps in Simulation
+
+```python
+def evaluate_grasp_in_sim(world, robot, gripper, grasp, target_prim):
+    """Execute and evaluate a grasp candidate in Isaac Sim.
+
+    Returns True if the object is successfully lifted and held.
+    """
+    grasp_pos = grasp["position"]
+    grasp_orn = grasp["orientation"]
+
+    # Phase 1: Move to pre-grasp pose (above the grasp point)
+    pre_grasp_pos = grasp_pos.copy()
+    pre_grasp_pos[2] += 0.10  # 10cm above
+    move_to_pose(robot, pre_grasp_pos, grasp_orn, steps=100, world=world)
+
+    # Phase 2: Open gripper
+    gripper.open()
+    for _ in range(20):
+        world.step(render=True)
+
+    # Phase 3: Approach to grasp pose
+    move_to_pose(robot, grasp_pos, grasp_orn, steps=50, world=world)
+
+    # Phase 4: Close gripper
+    gripper.close()
+    for _ in range(30):
+        world.step(render=True)
+
+    # Phase 5: Lift
+    lift_pos = grasp_pos.copy()
+    lift_pos[2] += 0.15  # Lift 15cm
+    move_to_pose(robot, lift_pos, grasp_orn, steps=80, world=world)
+
+    # Phase 6: Check success -- is the object above the table?
+    obj_position, _ = target_prim.get_world_pose()
+    lift_success = obj_position[2] > 0.50  # Above table height
+
+    # Phase 7: Hold for stability check
+    for _ in range(50):
+        world.step(render=True)
+
+    obj_position_after, _ = target_prim.get_world_pose()
+    hold_success = obj_position_after[2] > 0.48  # Still held
+
+    return lift_success and hold_success
+
+
+def move_to_pose(robot, target_pos, target_orn, steps, world):
+    """Move robot end-effector to target pose using IK."""
+    from omni.isaac.motion_generation import ArticulationKinematicsSolver
+
+    ik_solver = ArticulationKinematicsSolver(robot, "right_hand_link")
+
+    for step in range(steps):
+        # Interpolate to target
+        alpha = min(1.0, (step + 1) / steps)
+        current_target = robot.get_end_effector_pose()
+        interp_pos = (1 - alpha) * current_target[:3] + alpha * np.array(target_pos)
+
+        joint_targets = ik_solver.solve(interp_pos, target_orn)
+        if joint_targets is not None:
+            robot.set_joint_position_targets(joint_targets)
+
+        world.step(render=True)
+```
+
+### Batch Grasp Evaluation
+
+```python
+def batch_evaluate_grasps(world, robot, gripper, grasps, target_prim, max_trials=50):
+    """Evaluate multiple grasp candidates and return success rates."""
+    results = []
+
+    for i, grasp in enumerate(grasps[:max_trials]):
+        # Reset the scene before each trial
+        world.reset()
+
+        success = evaluate_grasp_in_sim(world, robot, gripper, grasp, target_prim)
+
+        results.append({
+            "grasp_idx": i,
+            "score": grasp["score"],
+            "success": success,
+            "position": grasp["position"].tolist(),
+        })
+
+        status = "SUCCESS" if success else "FAIL"
+        print(f"Grasp {i+1}/{max_trials}: {status} (score={grasp['score']:.3f})")
+
+    # Compute statistics
+    successes = sum(1 for r in results if r["success"])
+    success_rate = successes / len(results)
+    print(f"\nOverall success rate: {success_rate:.1%} ({successes}/{len(results)})")
+
+    return results
+```
+
+## Manipulation Task Design
+
+Designing manipulation tasks requires careful consideration of the observation space, action space, and reward structure.
+
+### Pick-and-Place Environment
+
+```python
+import torch
+import numpy as np
+from isaaclab.envs import ManagerBasedRLEnvCfg
+
+class PickPlaceObservations:
+    """Observation terms for a pick-and-place manipulation task."""
+
+    @staticmethod
+    def gripper_position(env):
+        """End-effector position in world frame. Shape: [num_envs, 3]"""
+        return env.robot.get_end_effector_pose()[:, :3]
+
+    @staticmethod
+    def gripper_velocity(env):
+        """End-effector linear velocity. Shape: [num_envs, 3]"""
+        return env.robot.get_end_effector_velocity()[:, :3]
+
+    @staticmethod
+    def object_position(env):
+        """Target object position. Shape: [num_envs, 3]"""
+        return env.object.get_world_poses()[0]
+
+    @staticmethod
+    def object_to_gripper(env):
+        """Vector from object to gripper. Shape: [num_envs, 3]"""
+        gripper_pos = env.robot.get_end_effector_pose()[:, :3]
+        object_pos = env.object.get_world_poses()[0]
+        return gripper_pos - object_pos
+
+    @staticmethod
+    def object_to_goal(env):
+        """Vector from object to placement goal. Shape: [num_envs, 3]"""
+        object_pos = env.object.get_world_poses()[0]
+        goal_pos = env.goal_position
+        return goal_pos - object_pos
+
+    @staticmethod
+    def gripper_state(env):
+        """Gripper open/close state. Shape: [num_envs, 1]"""
+        return env.gripper.get_joint_positions().unsqueeze(-1)
+
+
+class PickPlaceRewards:
+    """Reward terms for pick-and-place training."""
+
+    @staticmethod
+    def reaching_reward(env):
+        """Reward for moving gripper toward the object."""
+        dist = torch.norm(
+            env.robot.get_end_effector_pose()[:, :3] - env.object.get_world_poses()[0],
+            dim=-1,
+        )
+        return -dist  # Negative distance: closer = higher reward
+
+    @staticmethod
+    def grasping_reward(env):
+        """Reward for successfully grasping the object."""
+        # Check if object is between gripper fingers
+        obj_height = env.object.get_world_poses()[0][:, 2]
+        gripper_height = env.robot.get_end_effector_pose()[:, 2]
+
+        # Object should be near gripper and above table
+        height_match = torch.abs(obj_height - gripper_height) < 0.02
+        above_table = obj_height > 0.42
+
+        return (height_match & above_table).float() * 2.0
+
+    @staticmethod
+    def placement_reward(env):
+        """Reward for placing object at the goal location."""
+        obj_pos = env.object.get_world_poses()[0]
+        goal_pos = env.goal_position
+        dist_to_goal = torch.norm(obj_pos - goal_pos, dim=-1)
+
+        # Large reward for placing within 2cm of goal
+        placed = (dist_to_goal < 0.02).float() * 10.0
+        # Shaping reward for approaching goal
+        approaching = -dist_to_goal
+
+        return placed + approaching
+```
+
+## Summary
+
+In this chapter, you learned how to:
+
+1. **Generate synthetic datasets** using Isaac Replicator with automatic annotations including bounding boxes, segmentation masks, and depth maps
+2. **Apply domain randomization** across visual, geometric, physical, and camera parameters to produce training data that generalizes to real sensors
+3. **Simulate cameras realistically** with proper intrinsics, noise models, and depth sensor characteristics
+4. **Train object detection models** on synthetic data using standard PyTorch workflows
+5. **Plan and evaluate grasps** using analytical methods validated in physically accurate simulation
+6. **Design manipulation environments** with structured observation spaces, action spaces, and reward functions
+
+The ability to generate unlimited, perfectly labeled training data in simulation -- and validate manipulation strategies before touching real hardware -- is one of the most transformative capabilities the Isaac platform offers for humanoid robotics development.
+
+## Exercises
+
+1. **Synthetic Dataset Generation**: Use Isaac Replicator to generate a dataset of 5,000 images with 5 different household objects. Include RGB, depth, and bounding box annotations. Visualize 10 random samples with overlaid bounding boxes.
+
+2. **Domain Randomization Ablation**: Train an object detection model with three configurations: (a) no randomization, (b) visual randomization only, (c) full randomization. Compare detection accuracy on a held-out set of real images.
+
+3. **Depth Noise Modeling**: Implement noise models for three different depth sensors (RealSense D435, Azure Kinect, Stereolabs ZED 2). Compare their characteristics by generating depth images of the same scene with each noise profile.
+
+4. **Grasp Planning**: Implement a grasp planner that generates candidates for cylindrical objects (bottles, cans). Evaluate 100 grasps in simulation and report the success rate.
+
+5. **Pick-and-Place Task**: Design a complete pick-and-place environment with at least 3 object types and 2 goal locations. Define observation, action, reward, and termination terms. Run a random policy for 1,000 steps and visualize the reward curve.
+
+## Next Steps
+
+Continue to [Reinforcement Learning in Isaac](./reinforcement-learning) to learn how to train locomotion and manipulation policies using massively parallel GPU environments with PPO and other RL algorithms.

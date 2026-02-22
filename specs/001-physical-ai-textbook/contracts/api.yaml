@@ -1,0 +1,445 @@
+openapi: 3.1.0
+info:
+  title: Physical AI Textbook API
+  description: Backend API for RAG chatbot, authentication, personalization, and translation
+  version: 1.0.0
+  contact:
+    name: Physical AI Textbook Team
+
+servers:
+  - url: https://api.physical-ai-textbook.vercel.app
+    description: Production API
+  - url: http://localhost:8000
+    description: Local development
+
+tags:
+  - name: chat
+    description: RAG chatbot endpoints
+  - name: auth
+    description: Authentication endpoints
+  - name: personalization
+    description: Content personalization endpoints
+  - name: translation
+    description: Urdu translation endpoints
+
+paths:
+  # ============ CHAT ENDPOINTS ============
+  /api/chat:
+    post:
+      tags: [chat]
+      summary: Send a message to the chatbot
+      description: Process a user query using RAG to find relevant textbook content
+      operationId: sendChatMessage
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChatRequest'
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChatResponse'
+        '429':
+          description: Rate limit exceeded
+        '500':
+          description: Server error
+
+  /api/chat/stream:
+    post:
+      tags: [chat]
+      summary: Send a message with streaming response
+      description: Process a user query and stream the response
+      operationId: sendChatMessageStream
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChatRequest'
+      responses:
+        '200':
+          description: Server-sent events stream
+          content:
+            text/event-stream:
+              schema:
+                type: string
+
+  /api/chat/selected-text:
+    post:
+      tags: [chat]
+      summary: Ask about selected text
+      description: Answer a question about user-highlighted text from a chapter
+      operationId: askAboutSelectedText
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SelectedTextRequest'
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChatResponse'
+
+  # ============ AUTH ENDPOINTS ============
+  /api/auth/signup:
+    post:
+      tags: [auth]
+      summary: Create a new user account
+      description: Register with email, password, and background profile
+      operationId: signup
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SignupRequest'
+      responses:
+        '201':
+          description: User created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthResponse'
+        '400':
+          description: Invalid input
+        '409':
+          description: Email already registered
+
+  /api/auth/login:
+    post:
+      tags: [auth]
+      summary: Log in to existing account
+      operationId: login
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        '200':
+          description: Login successful
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthResponse'
+        '401':
+          description: Invalid credentials
+
+  /api/auth/logout:
+    post:
+      tags: [auth]
+      summary: Log out current user
+      operationId: logout
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Logout successful
+        '401':
+          description: Not authenticated
+
+  /api/auth/me:
+    get:
+      tags: [auth]
+      summary: Get current user profile
+      operationId: getCurrentUser
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: User profile
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserWithProfile'
+        '401':
+          description: Not authenticated
+
+  # ============ PERSONALIZATION ENDPOINTS ============
+  /api/personalize:
+    post:
+      tags: [personalization]
+      summary: Personalize chapter content
+      description: Adapt chapter content based on user's background profile
+      operationId: personalizeContent
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PersonalizeRequest'
+      responses:
+        '200':
+          description: Personalized content
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PersonalizeResponse'
+        '401':
+          description: Not authenticated
+        '404':
+          description: Chapter not found
+
+  # ============ TRANSLATION ENDPOINTS ============
+  /api/translate:
+    post:
+      tags: [translation]
+      summary: Translate content to Urdu
+      description: Translate chapter content from English to Urdu
+      operationId: translateToUrdu
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TranslateRequest'
+      responses:
+        '200':
+          description: Translated content
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TranslateResponse'
+        '400':
+          description: Invalid input
+        '500':
+          description: Translation service error
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+    # ============ CHAT SCHEMAS ============
+    ChatRequest:
+      type: object
+      required:
+        - message
+        - session_id
+      properties:
+        message:
+          type: string
+          description: User's question
+          example: "What is ROS 2?"
+        session_id:
+          type: string
+          description: Session identifier for conversation context
+          example: "sess_abc123"
+        chapter_context:
+          type: string
+          description: Current chapter slug for context
+          example: "ros2-nodes-topics"
+
+    ChatResponse:
+      type: object
+      properties:
+        response:
+          type: string
+          description: Chatbot's answer
+        references:
+          type: array
+          items:
+            $ref: '#/components/schemas/ChapterReference'
+        session_id:
+          type: string
+
+    ChapterReference:
+      type: object
+      properties:
+        chapter_slug:
+          type: string
+        chapter_title:
+          type: string
+        module_slug:
+          type: string
+        relevance_score:
+          type: number
+          format: float
+
+    SelectedTextRequest:
+      type: object
+      required:
+        - selected_text
+        - question
+        - chapter_slug
+      properties:
+        selected_text:
+          type: string
+          description: Text highlighted by user
+        question:
+          type: string
+          description: User's question about the text
+          example: "Explain this in simpler terms"
+        chapter_slug:
+          type: string
+          description: Source chapter
+
+    # ============ AUTH SCHEMAS ============
+    SignupRequest:
+      type: object
+      required:
+        - email
+        - password
+        - profile
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+          minLength: 8
+        profile:
+          $ref: '#/components/schemas/UserProfileInput'
+
+    LoginRequest:
+      type: object
+      required:
+        - email
+        - password
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+
+    AuthResponse:
+      type: object
+      properties:
+        user:
+          $ref: '#/components/schemas/User'
+        token:
+          type: string
+          description: JWT access token
+        expires_at:
+          type: string
+          format: date-time
+
+    User:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        email:
+          type: string
+          format: email
+        created_at:
+          type: string
+          format: date-time
+
+    UserWithProfile:
+      allOf:
+        - $ref: '#/components/schemas/User'
+        - type: object
+          properties:
+            profile:
+              $ref: '#/components/schemas/UserProfile'
+
+    UserProfileInput:
+      type: object
+      required:
+        - python_level
+        - ros_level
+        - ml_level
+      properties:
+        python_level:
+          $ref: '#/components/schemas/SkillLevel'
+        ros_level:
+          $ref: '#/components/schemas/SkillLevel'
+        ml_level:
+          $ref: '#/components/schemas/SkillLevel'
+        arduino_experience:
+          type: boolean
+          default: false
+        jetson_experience:
+          type: boolean
+          default: false
+        robot_experience:
+          type: boolean
+          default: false
+        learning_goals:
+          type: string
+
+    UserProfile:
+      allOf:
+        - $ref: '#/components/schemas/UserProfileInput'
+        - type: object
+          properties:
+            id:
+              type: string
+              format: uuid
+            user_id:
+              type: string
+              format: uuid
+            created_at:
+              type: string
+              format: date-time
+
+    SkillLevel:
+      type: string
+      enum: [none, beginner, intermediate, expert]
+
+    # ============ PERSONALIZATION SCHEMAS ============
+    PersonalizeRequest:
+      type: object
+      required:
+        - chapter_slug
+        - content
+      properties:
+        chapter_slug:
+          type: string
+          description: Chapter to personalize
+        content:
+          type: string
+          description: Original chapter content (markdown)
+
+    PersonalizeResponse:
+      type: object
+      properties:
+        personalized_content:
+          type: string
+          description: Adapted content based on user profile
+        adaptations_made:
+          type: array
+          items:
+            type: string
+          description: List of adaptations applied
+
+    # ============ TRANSLATION SCHEMAS ============
+    TranslateRequest:
+      type: object
+      required:
+        - content
+        - chapter_slug
+      properties:
+        content:
+          type: string
+          description: English content to translate
+        chapter_slug:
+          type: string
+          description: Chapter identifier for caching
+
+    TranslateResponse:
+      type: object
+      properties:
+        translated_content:
+          type: string
+          description: Urdu translation
+        cached:
+          type: boolean
+          description: Whether result was from cache

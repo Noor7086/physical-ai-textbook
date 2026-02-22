@@ -1,0 +1,553 @@
+---
+sidebar_position: 5
+title: "Sim-to-Real Transfer"
+description: "Bridging the reality gap with domain randomization, system identification, transfer learning, and deployment pipelines from Isaac Sim to physical humanoid robots"
+---
+
+# Sim-to-Real Transfer
+
+Training a robot policy in simulation is only half the battle. The **reality gap** -- the difference between simulated and real-world physics, sensing, and dynamics -- can cause a policy that works perfectly in simulation to fail catastrophically on hardware. This chapter covers proven techniques for bridging that gap and deploying Isaac Sim-trained policies onto physical humanoid robots.
+
+## Learning Objectives
+
+By the end of this chapter, you will be able to:
+
+1. **Identify** the sources of the reality gap and their impact on policy transfer
+2. **Apply** domain randomization strategies to train robust policies
+3. **Perform** system identification to calibrate simulation parameters
+4. **Use** transfer learning to adapt simulation-trained models to real data
+5. **Design** a deployment pipeline from Isaac Sim to a physical robot
+6. **Validate** transferred policies with structured testing protocols
+
+---
+
+## The Reality Gap
+
+The reality gap arises because simulators make simplifying assumptions about the world. Every approximation introduces discrepancies that accumulate during deployment.
+
+```
+┌───────────────────────────────────────────────────────┐
+│                    THE REALITY GAP                     │
+│                                                       │
+│  Simulation                          Real World       │
+│  ──────────                          ──────────       │
+│  Perfect actuators     !=     Backlash, friction      │
+│  Exact joint angles    !=     Encoder noise + drift   │
+│  Rigid body physics    !=     Soft contacts, flex     │
+│  Clean sensor data     !=     Noise, latency, dropout │
+│  Instant computation   !=     Control loop delays     │
+│  Flat terrain model    !=     Uneven, deformable      │
+│  Known masses          !=     Manufacturing variance  │
+│                                                       │
+│  Goal: Make simulation diverse enough that reality    │
+│        falls within the training distribution         │
+└───────────────────────────────────────────────────────┘
+```
+
+### Sources of the Reality Gap
+
+| Source | Simulation Assumption | Real-World Reality | Impact |
+|--------|----------------------|-------------------|--------|
+| **Actuator dynamics** | Instant torque response | Delays, saturation, friction | Motor commands lag; jerky motion |
+| **Contact physics** | Rigid body, penalty-based | Soft, deformable, stochastic | Foot slippage, unstable contacts |
+| **Sensor noise** | Clean or simple Gaussian | Non-linear, correlated noise | State estimation errors |
+| **Latency** | Zero or fixed delay | Variable computation + network | Actions applied at wrong state |
+| **Mass/inertia** | CAD-specified values | Manufacturing tolerances of 5-10% | Incorrect dynamics response |
+| **Ground terrain** | Flat or procedural | Uneven, soft, unexpected obstacles | Balance and gait failures |
+
+---
+
+## Domain Randomization
+
+Domain randomization is the most widely used sim-to-real technique. The core idea: if you train on a distribution of simulated environments broad enough to include reality, the policy generalizes to the real world without ever seeing it.
+
+### Randomization Categories
+
+```python
+import torch
+import numpy as np
+
+class SimToRealRandomization:
+    """Comprehensive domain randomization for sim-to-real transfer."""
+
+    def __init__(self, num_envs, device="cuda:0"):
+        self.num_envs = num_envs
+        self.device = device
+
+    def randomize_dynamics(self):
+        """Randomize physical properties of the robot and environment."""
+        params = {}
+
+        # Ground friction: real floors vary from 0.3 (tile) to 1.2 (rubber)
+        params["ground_friction"] = torch.empty(self.num_envs).uniform_(0.4, 1.5)
+
+        # Robot mass: +/- 15% of nominal
+        params["mass_scale"] = torch.empty(self.num_envs).uniform_(0.85, 1.15)
+
+        # Center of mass offset: up to 3cm in any direction
+        params["com_offset"] = torch.empty(self.num_envs, 3).uniform_(-0.03, 0.03)
+
+        # Joint damping: +/- 30% of nominal
+        params["joint_damping_scale"] = torch.empty(self.num_envs).uniform_(0.7, 1.3)
+
+        # Restitution (bounciness): 0.0 to 0.4
+        params["restitution"] = torch.empty(self.num_envs).uniform_(0.0, 0.4)
+
+        return {k: v.to(self.device) for k, v in params.items()}
+
+    def randomize_actuators(self):
+        """Randomize motor characteristics."""
+        params = {}
+
+        # Motor strength: +/- 20% variation
+        params["motor_strength"] = torch.empty(self.num_envs).uniform_(0.8, 1.2)
+
+        # Control delay: 0 to 40ms (0-2 simulation steps at 50Hz)
+        params["action_delay_steps"] = torch.randint(0, 3, (self.num_envs,))
+
+        # Joint position offset (calibration error)
+        params["joint_offset"] = torch.empty(self.num_envs, 20).uniform_(-0.05, 0.05)
+
+        # PD gain randomization
+        params["kp_scale"] = torch.empty(self.num_envs).uniform_(0.8, 1.2)
+        params["kd_scale"] = torch.empty(self.num_envs).uniform_(0.8, 1.2)
+
+        return {k: v.to(self.device) for k, v in params.items()}
+
+    def randomize_observations(self):
+        """Add noise to observations to simulate real sensor characteristics."""
+        noise = {}
+
+        # Joint position noise (encoder resolution + noise)
+        noise["joint_pos_noise"] = 0.02      # rad std dev
+
+        # Joint velocity noise (derived from position differencing)
+        noise["joint_vel_noise"] = 1.5        # rad/s std dev
+
+        # IMU angular velocity noise
+        noise["gyro_noise"] = 0.05            # rad/s std dev
+
+        # IMU linear acceleration noise
+        noise["accel_noise"] = 0.5            # m/s^2 std dev
+
+        # Gravity vector estimation error
+        noise["gravity_noise"] = 0.05         # direction noise
+
+        return noise
+
+    def randomize_terrain(self):
+        """Generate varied terrain for locomotion robustness."""
+        terrain_configs = []
+        for i in range(self.num_envs):
+            terrain_type = np.random.choice(
+                ["flat", "rough", "slope", "stairs", "stepping_stones"],
+                p=[0.3, 0.25, 0.2, 0.15, 0.1]
+            )
+            config = {"type": terrain_type}
+
+            if terrain_type == "rough":
+                config["roughness"] = np.random.uniform(0.01, 0.06)  # meters
+            elif terrain_type == "slope":
+                config["angle"] = np.random.uniform(-15, 15)  # degrees
+            elif terrain_type == "stairs":
+                config["step_height"] = np.random.uniform(0.05, 0.18)  # meters
+                config["step_width"] = np.random.uniform(0.25, 0.35)
+
+            terrain_configs.append(config)
+        return terrain_configs
+```
+
+### Applying Action Delay Randomization
+
+Control latency is one of the most impactful reality gap factors. Simulating variable delays during training makes policies robust to real-world timing issues.
+
+```python
+class ActionDelayBuffer:
+    """Simulates variable control delays by buffering actions.
+
+    On real hardware, there is always a delay between computing
+    an action and the motors executing it. This delay varies due
+    to communication latency, computation time, and OS scheduling.
+    """
+
+    def __init__(self, num_envs, action_dim, max_delay_steps=3, device="cuda:0"):
+        self.num_envs = num_envs
+        self.max_delay = max_delay_steps
+        self.buffer = torch.zeros(
+            num_envs, max_delay_steps + 1, action_dim, device=device
+        )
+        # Assign a random delay to each environment
+        self.delays = torch.randint(0, max_delay_steps + 1, (num_envs,), device=device)
+
+    def push(self, actions):
+        """Add new actions to the buffer and return delayed actions."""
+        # Shift buffer: oldest actions fall off
+        self.buffer[:, 1:] = self.buffer[:, :-1].clone()
+        self.buffer[:, 0] = actions
+
+        # Each env reads from its assigned delay position
+        delayed_actions = torch.zeros_like(actions)
+        for i in range(self.num_envs):
+            delayed_actions[i] = self.buffer[i, self.delays[i]]
+
+        return delayed_actions
+
+    def resample_delays(self):
+        """Re-randomize delays (call at episode reset)."""
+        self.delays = torch.randint(
+            0, self.max_delay + 1, (self.num_envs,), device=self.buffer.device
+        )
+```
+
+---
+
+## System Identification
+
+While domain randomization is a brute-force approach, **system identification** (sysid) takes the opposite strategy: carefully measure the real system's parameters and calibrate the simulator to match.
+
+### Parameter Estimation Pipeline
+
+```
+┌────────────────┐     ┌────────────────┐     ┌────────────────┐
+│  Real Robot     │     │  Optimization  │     │  Calibrated    │
+│  Experiments    │────▶│  Loop          │────▶│  Simulator     │
+│                 │     │                │     │                │
+│  - Step inputs  │     │  min ||y_real  │     │  Parameters    │
+│  - Trajectories │     │    - y_sim||^2 │     │  match reality │
+│  - Disturbances │     │                │     │                │
+└────────────────┘     └────────────────┘     └────────────────┘
+```
+
+```python
+import numpy as np
+from scipy.optimize import minimize
+
+class SystemIdentification:
+    """Estimate physical parameters by matching sim to real behavior."""
+
+    def __init__(self, sim_env):
+        self.sim_env = sim_env
+
+    def collect_real_data(self, robot_interface, test_trajectories):
+        """Collect reference data from the physical robot.
+
+        Execute predefined test motions and record joint positions,
+        velocities, and torques at each timestep.
+        """
+        real_data = []
+        for trajectory in test_trajectories:
+            episode_data = {"commands": [], "positions": [], "velocities": []}
+            for command in trajectory:
+                robot_interface.send_joint_command(command)
+                state = robot_interface.read_joint_state()
+
+                episode_data["commands"].append(command)
+                episode_data["positions"].append(state.positions)
+                episode_data["velocities"].append(state.velocities)
+
+            real_data.append({
+                k: np.array(v) for k, v in episode_data.items()
+            })
+        return real_data
+
+    def simulate_with_params(self, params, test_trajectories):
+        """Run the same trajectories in simulation with given parameters."""
+        # Apply parameters to simulator
+        self.sim_env.set_friction(params["friction"])
+        self.sim_env.set_mass_scale(params["mass_scale"])
+        self.sim_env.set_joint_damping(params["joint_damping"])
+        self.sim_env.set_motor_strength(params["motor_strength"])
+        self.sim_env.set_kp(params["kp"])
+        self.sim_env.set_kd(params["kd"])
+
+        sim_data = []
+        for trajectory in test_trajectories:
+            episode_data = {"positions": [], "velocities": []}
+            self.sim_env.reset()
+            for command in trajectory:
+                obs = self.sim_env.step(command)
+                episode_data["positions"].append(obs["joint_positions"])
+                episode_data["velocities"].append(obs["joint_velocities"])
+
+            sim_data.append({
+                k: np.array(v) for k, v in episode_data.items()
+            })
+        return sim_data
+
+    def objective(self, param_vector, real_data, test_trajectories, param_names):
+        """Compute the error between real and simulated trajectories."""
+        params = dict(zip(param_names, param_vector))
+        sim_data = self.simulate_with_params(params, test_trajectories)
+
+        total_error = 0.0
+        for real_ep, sim_ep in zip(real_data, sim_data):
+            pos_error = np.mean((real_ep["positions"] - sim_ep["positions"]) ** 2)
+            vel_error = np.mean((real_ep["velocities"] - sim_ep["velocities"]) ** 2)
+            total_error += pos_error + 0.1 * vel_error
+
+        return total_error
+
+    def optimize(self, real_data, test_trajectories):
+        """Find simulation parameters that best match real data."""
+        param_names = ["friction", "mass_scale", "joint_damping",
+                       "motor_strength", "kp", "kd"]
+        initial_guess = [0.8, 1.0, 5.0, 1.0, 60.0, 2.0]
+        bounds = [
+            (0.3, 1.5),   # friction
+            (0.8, 1.2),   # mass_scale
+            (1.0, 20.0),  # joint_damping
+            (0.7, 1.3),   # motor_strength
+            (20.0, 150.0), # kp
+            (0.5, 10.0),  # kd
+        ]
+
+        result = minimize(
+            self.objective,
+            initial_guess,
+            args=(real_data, test_trajectories, param_names),
+            method="L-BFGS-B",
+            bounds=bounds,
+            options={"maxiter": 200, "ftol": 1e-8}
+        )
+
+        optimized_params = dict(zip(param_names, result.x))
+        print(f"Optimization converged: {result.success}")
+        print(f"Final error: {result.fun:.6f}")
+        print("Optimized parameters:")
+        for name, value in optimized_params.items():
+            print(f"  {name}: {value:.4f}")
+
+        return optimized_params
+```
+
+---
+
+## Transfer Learning Techniques
+
+When domain randomization alone is not sufficient, transfer learning can adapt a simulation-trained policy using a small amount of real-world data.
+
+### Fine-Tuning with Real Data
+
+```python
+import torch
+import torch.nn as nn
+
+class SimToRealFineTuner:
+    """Fine-tune a sim-trained policy with real robot experience."""
+
+    def __init__(self, sim_policy, learning_rate=1e-5):
+        self.policy = sim_policy
+        self.policy.train()
+
+        # Use a very small learning rate to avoid catastrophic forgetting
+        self.optimizer = torch.optim.Adam(
+            self.policy.parameters(), lr=learning_rate
+        )
+
+        # Freeze early layers (feature extraction), train later layers
+        for name, param in self.policy.named_parameters():
+            if "layer_0" in name or "layer_1" in name:
+                param.requires_grad = False
+                print(f"  Frozen: {name}")
+            else:
+                print(f"  Trainable: {name}")
+
+    def fine_tune_step(self, real_observations, real_actions, real_rewards):
+        """One gradient step using real-world experience.
+
+        Uses behavior cloning loss combined with reward-weighted regression.
+        """
+        # Forward pass
+        predicted_actions = self.policy(real_observations)
+
+        # Behavior cloning loss: match the actions that led to high rewards
+        reward_weights = torch.softmax(real_rewards / 0.1, dim=0)
+        bc_loss = torch.sum(
+            reward_weights * torch.mean((predicted_actions - real_actions) ** 2, dim=-1)
+        )
+
+        # Update
+        self.optimizer.zero_grad()
+        bc_loss.backward()
+        torch.nn.utils.clip_grad_norm_(self.policy.parameters(), 1.0)
+        self.optimizer.step()
+
+        return bc_loss.item()
+
+    def adapt(self, real_dataset, num_epochs=50, batch_size=64):
+        """Run full adaptation loop."""
+        print(f"Fine-tuning with {len(real_dataset)} real samples")
+
+        for epoch in range(num_epochs):
+            indices = torch.randperm(len(real_dataset))
+            total_loss = 0.0
+            num_batches = 0
+
+            for start in range(0, len(indices), batch_size):
+                batch_idx = indices[start:start + batch_size]
+                obs = real_dataset.observations[batch_idx]
+                acts = real_dataset.actions[batch_idx]
+                rews = real_dataset.rewards[batch_idx]
+
+                loss = self.fine_tune_step(obs, acts, rews)
+                total_loss += loss
+                num_batches += 1
+
+            avg_loss = total_loss / num_batches
+            if epoch % 10 == 0:
+                print(f"  Epoch {epoch}: avg loss = {avg_loss:.6f}")
+```
+
+---
+
+## Deployment Pipeline
+
+### From Simulation to Robot
+
+```
+┌──────────────┐    ┌──────────────┐    ┌──────────────┐    ┌──────────────┐
+│  Train in     │    │  Export      │    │  Validate    │    │  Deploy on   │
+│  Isaac Sim    │───▶│  Policy     │───▶│  on Hardware │───▶│  Robot       │
+│  (GPU)        │    │  (TorchScript│    │  (Tethered)  │    │  (Untethered)│
+│               │    │   or ONNX)  │    │              │    │              │
+└──────────────┘    └──────────────┘    └──────────────┘    └──────────────┘
+```
+
+```python
+import torch
+
+def export_policy_for_deployment(checkpoint_path, output_path):
+    """Export a trained policy for deployment on robot hardware."""
+
+    # Load the trained policy
+    policy = torch.load(checkpoint_path, map_location="cpu")
+
+    # Create a traced version for deployment (no Python dependency)
+    example_obs = torch.randn(1, 60)  # Match observation dimension
+    traced_policy = torch.jit.trace(policy, example_obs)
+
+    # Save as TorchScript
+    traced_policy.save(f"{output_path}/policy.pt")
+    print(f"TorchScript policy saved to {output_path}/policy.pt")
+
+    # Also export to ONNX for non-PyTorch deployment targets
+    torch.onnx.export(
+        policy,
+        example_obs,
+        f"{output_path}/policy.onnx",
+        input_names=["observations"],
+        output_names=["actions"],
+        dynamic_axes={"observations": {0: "batch_size"}},
+        opset_version=14,
+    )
+    print(f"ONNX policy saved to {output_path}/policy.onnx")
+
+
+class RobotPolicyRunner:
+    """Run a trained policy on physical robot hardware."""
+
+    def __init__(self, policy_path, robot_interface, control_rate=50.0):
+        self.policy = torch.jit.load(policy_path)
+        self.policy.eval()
+        self.robot = robot_interface
+        self.dt = 1.0 / control_rate
+        self.observation_history = []
+
+    def build_observation(self):
+        """Construct the observation vector from real sensor data."""
+        state = self.robot.read_state()
+
+        obs = torch.tensor([
+            *state.base_linear_velocity,     # 3
+            *state.base_angular_velocity,     # 3
+            *state.projected_gravity,         # 3
+            *state.joint_positions_normalized, # 20
+            *state.joint_velocities,          # 20
+            *self.previous_actions,           # 20
+            *self.velocity_command,           # 3
+        ], dtype=torch.float32).unsqueeze(0)  # Total: ~72
+
+        return obs
+
+    def run(self, duration_s=30.0):
+        """Execute the policy on the real robot."""
+        import time
+
+        self.previous_actions = [0.0] * 20
+        self.velocity_command = [0.5, 0.0, 0.0]  # Walk forward at 0.5 m/s
+        num_steps = int(duration_s / self.dt)
+
+        print(f"Running policy for {duration_s}s at {1/self.dt:.0f}Hz")
+        self.robot.enable_motors()
+
+        for step in range(num_steps):
+            t_start = time.time()
+
+            # Build observation from real sensors
+            obs = self.build_observation()
+
+            # Run policy inference
+            with torch.no_grad():
+                actions = self.policy(obs).squeeze(0).numpy()
+
+            # Send actions to robot
+            self.robot.send_joint_position_targets(actions)
+            self.previous_actions = actions.tolist()
+
+            # Maintain control rate
+            elapsed = time.time() - t_start
+            sleep_time = self.dt - elapsed
+            if sleep_time > 0:
+                time.sleep(sleep_time)
+            elif step % 100 == 0:
+                print(f"  Warning: loop overran by {-sleep_time*1000:.1f}ms")
+
+        self.robot.disable_motors()
+        print("Policy execution complete.")
+```
+
+---
+
+## Validation Strategies
+
+### Structured Testing Protocol
+
+| Test Phase | Environment | Pass Criteria | Duration |
+|-----------|-------------|---------------|----------|
+| **Sim validation** | Isaac Sim (nominal) | 95% success rate over 1000 episodes | Before hardware |
+| **Sim robustness** | Isaac Sim (randomized) | 80% success under max randomization | Before hardware |
+| **Tethered test** | Real robot, safety harness | Walks 5m without falling, 3/5 trials | First hardware test |
+| **Flat ground** | Real robot, level floor | Walks 20m, tracks velocity within 20% | After tethered |
+| **Disturbance** | Real robot, manual pushes | Recovers from 50N lateral push, 4/5 trials | After flat ground |
+| **Varied terrain** | Real robot, carpet/tile/ramp | Walks 10m on 3 surfaces, 3/5 each | After disturbance |
+| **Long duration** | Real robot, 10-minute walk | Completes without fall or drift | Final validation |
+
+---
+
+## Summary
+
+| Concept | Key Takeaway |
+|---------|-------------|
+| **Reality gap** | Simulation never perfectly matches reality; the gap must be managed |
+| **Domain randomization** | Train on a broad distribution so reality falls within it |
+| **System identification** | Measure real parameters and calibrate the simulator |
+| **Transfer learning** | Fine-tune sim-trained policies with small amounts of real data |
+| **Action delay** | Simulating variable latency is critical for motor control transfer |
+| **Deployment pipeline** | Export to TorchScript/ONNX, validate tethered, then deploy |
+| **Validation** | Structured testing from simulation through real-world stress tests |
+
+## Exercises
+
+1. **Randomization Sensitivity**: Train policies with narrow and wide randomization ranges for friction. Deploy both in a sim environment with unseen friction values and compare success rates.
+
+2. **System Identification**: Record 30 seconds of a simulated robot executing step-response commands. Add noise to simulate "real" data. Run system identification and check if the optimizer recovers the true parameters.
+
+3. **Action Delay Impact**: Train three policies with maximum delay of 0, 20ms, and 40ms. Evaluate each policy in a simulation with 30ms fixed delay and compare performance degradation.
+
+4. **Fine-Tuning Budget**: Starting from a sim-trained policy, fine-tune with 10, 100, and 1000 real samples. Plot performance vs data budget to find the sweet spot.
+
+5. **End-to-End Pipeline**: Train a walking policy in Isaac Sim with full domain randomization, export to TorchScript, and run inference benchmarks to verify the policy meets the 50Hz control rate requirement on a Jetson Orin.
+
+## Next Steps
+
+Continue to [Humanoid Development](/humanoid-development/) to learn about the kinematics, dynamics, and control systems that form the foundation of humanoid robot design.

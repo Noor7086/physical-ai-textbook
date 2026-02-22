@@ -1,0 +1,812 @@
+---
+sidebar_position: 2
+title: "Physics Simulation"
+description: "Deep dive into physics engines in Gazebo: ODE, Bullet, DART, rigid body dynamics, collision detection, and simulation tuning"
+---
+
+# Physics Simulation in Gazebo
+
+Physics simulation is the foundation of any robotics simulator. Without accurate physics, a simulated robot's behavior will not transfer to the real world. This chapter explores how Gazebo simulates rigid body dynamics, collision detection, gravity, friction, and joint constraints -- and how you can configure these systems for humanoid robotics.
+
+## Learning Objectives
+
+By the end of this chapter, you will be able to:
+
+1. **Compare** the four physics engines available in Gazebo and choose the right one
+2. **Configure** gravity, friction, and contact parameters for realistic simulation
+3. **Understand** rigid body dynamics and how they apply to humanoid joints
+4. **Write** SDF world files with custom physics configurations
+5. **Debug** common physics simulation problems (jitter, penetration, instability)
+6. **Tune** simulation step size and solver iterations for performance vs. accuracy
+
+## Physics Engines in Gazebo
+
+A **physics engine** is a software library responsible for computing how objects move, collide, and interact under physical laws. Gazebo supports multiple physics engines through a plugin architecture, allowing you to swap engines without changing your robot model.
+
+### Available Physics Engines
+
+| Engine | Full Name | Default In | Strengths | Weaknesses |
+|--------|-----------|-----------|-----------|------------|
+| **ODE** | Open Dynamics Engine | Gazebo Classic | Mature, well-tested, fast for simple scenes | Less accurate contacts, no featherstone |
+| **Bullet** | Bullet Physics | -- | Game industry standard, GPU support | Contact stability can be tricky |
+| **DART** | Dynamic Animation and Robotics Toolkit | Gazebo Harmonic | Excellent for articulated bodies, Featherstone algorithm | Slower for massive particle systems |
+| **Simbody** | SimTK Simbody | -- | High accuracy for biomechanics | Smaller community, less maintained |
+
+### Choosing a Physics Engine
+
+For **humanoid robotics**, **DART** is the recommended engine because:
+
+1. **Featherstone Algorithm** -- Efficient O(n) computation for articulated rigid body dynamics, critical for robots with 30+ joints
+2. **Accurate Contact Models** -- Better handling of multi-point contact (e.g., foot-ground interaction)
+3. **Constraint Satisfaction** -- Robust joint limit enforcement
+4. **Active Development** -- Maintained by Georgia Tech, widely used in robotics research
+
+```xml
+<!-- world_with_dart.sdf -- Specifying DART as the physics engine -->
+<?xml version="1.0" ?>
+<sdf version="1.9">
+  <world name="humanoid_world">
+    
+    <physics name="dart_physics" type="dart">
+      <max_step_size>0.001</max_step_size>
+      <real_time_factor>1.0</real_time_factor>
+      <real_time_update_rate>1000</real_time_update_rate>
+      <dart>
+        <solver>
+          <solver_type>dantzig</solver_type>
+        </solver>
+        <collision_detector>fcl</collision_detector>
+      </dart>
+    </physics>
+
+    <!-- Gravity pointing downward -->
+    <gravity>0 0 -9.81</gravity>
+
+    <!-- Ground plane -->
+    <model name="ground_plane">
+      <static>true</static>
+      <link name="link">
+        <collision name="collision">
+          <geometry>
+            <plane>
+              <normal>0 0 1</normal>
+              <size>100 100</size>
+            </plane>
+          </geometry>
+          <surface>
+            <friction>
+              <ode>
+                <mu>0.8</mu>
+                <mu2>0.8</mu2>
+              </ode>
+            </friction>
+          </surface>
+        </collision>
+      </link>
+    </model>
+
+  </world>
+</sdf>
+```
+
+### Switching Physics Engines
+
+```bash
+# Launch Gazebo with different physics engines
+gz sim humanoid_world.sdf --physics-engine gz-physics-dart-plugin
+gz sim humanoid_world.sdf --physics-engine gz-physics-bullet-plugin
+gz sim humanoid_world.sdf --physics-engine gz-physics-tpe-plugin
+```
+
+## Rigid Body Dynamics
+
+Rigid body dynamics is the mathematical framework for simulating how solid objects move. Every link in your humanoid robot is treated as a rigid body with mass, inertia, and position.
+
+### Newton-Euler Equations
+
+The motion of a rigid body is governed by:
+
+**Translational motion** (Newton's Second Law):
+
+```
+F = m * a
+
+Where:
+  F = total force on the body (N)
+  m = mass (kg)
+  a = linear acceleration (m/s^2)
+```
+
+**Rotational motion** (Euler's equation):
+
+```
+tau = I * alpha + omega x (I * omega)
+
+Where:
+  tau   = total torque on the body (N*m)
+  I     = inertia tensor (kg*m^2)
+  alpha = angular acceleration (rad/s^2)
+  omega = angular velocity (rad/s)
+```
+
+### Inertia Tensors
+
+Every link in your robot must have a correctly specified inertia tensor. Incorrect inertia values are one of the most common causes of simulation instability.
+
+```xml
+<!-- Defining mass and inertia for a humanoid torso link -->
+<link name="torso">
+  <inertial>
+    <mass>15.0</mass>
+    <pose>0 0 0.1 0 0 0</pose>
+    <inertia>
+      <ixx>0.5</ixx>
+      <ixy>0.0</ixy>
+      <ixz>0.0</ixz>
+      <iyy>0.3</iyy>
+      <iyz>0.0</iyz>
+      <izz>0.2</izz>
+    </inertia>
+  </inertial>
+  <collision name="torso_collision">
+    <geometry>
+      <box>
+        <size>0.3 0.2 0.5</size>
+      </box>
+    </geometry>
+  </collision>
+  <visual name="torso_visual">
+    <geometry>
+      <mesh>
+        <uri>meshes/torso.dae</uri>
+      </mesh>
+    </geometry>
+  </visual>
+</link>
+```
+
+### Computing Inertia from Geometry
+
+For simple shapes, inertia can be computed analytically. For complex meshes, use tools:
+
+```python
+import numpy as np
+
+def box_inertia(mass, lx, ly, lz):
+    """Compute inertia tensor for a solid box.
+    
+    Args:
+        mass: Mass in kg
+        lx, ly, lz: Dimensions along x, y, z axes in meters
+    
+    Returns:
+        Dictionary with inertia tensor components
+    """
+    ixx = (1.0 / 12.0) * mass * (ly**2 + lz**2)
+    iyy = (1.0 / 12.0) * mass * (lx**2 + lz**2)
+    izz = (1.0 / 12.0) * mass * (lx**2 + ly**2)
+    
+    return {
+        'ixx': round(ixx, 6),
+        'iyy': round(iyy, 6),
+        'izz': round(izz, 6),
+        'ixy': 0.0, 'ixz': 0.0, 'iyz': 0.0
+    }
+
+def cylinder_inertia(mass, radius, length):
+    """Compute inertia tensor for a solid cylinder (along z-axis)."""
+    ixx = (1.0 / 12.0) * mass * (3 * radius**2 + length**2)
+    iyy = ixx
+    izz = 0.5 * mass * radius**2
+    
+    return {'ixx': round(ixx, 6), 'iyy': round(iyy, 6), 'izz': round(izz, 6),
+            'ixy': 0.0, 'ixz': 0.0, 'iyz': 0.0}
+
+def sphere_inertia(mass, radius):
+    """Compute inertia tensor for a solid sphere."""
+    i = (2.0 / 5.0) * mass * radius**2
+    return {'ixx': round(i, 6), 'iyy': round(i, 6), 'izz': round(i, 6),
+            'ixy': 0.0, 'ixz': 0.0, 'iyz': 0.0}
+
+# Example: Humanoid upper arm (approximated as a cylinder)
+upper_arm = cylinder_inertia(mass=2.5, radius=0.04, length=0.28)
+print(f"Upper arm inertia: {upper_arm}")
+# Output: Upper arm inertia: {'ixx': 0.016533, 'iyy': 0.016533, 'izz': 0.002, ...}
+```
+
+## Joint Dynamics
+
+Humanoid robots are articulated systems -- a chain of rigid bodies connected by joints. Gazebo simulates several joint types relevant to humanoids.
+
+### Joint Types
+
+| Joint Type | DOF | Humanoid Application |
+|------------|-----|---------------------|
+| **Revolute** | 1 | Knee, elbow, finger joints |
+| **Continuous** | 1 | Wheels (not typical for humanoids) |
+| **Prismatic** | 1 | Linear actuators |
+| **Ball** | 3 | Hip, shoulder (approximated) |
+| **Universal** | 2 | Wrist |
+| **Fixed** | 0 | Sensor mounts, rigid attachments |
+
+### Defining Joints in SDF
+
+```xml
+<!-- Hip pitch joint for a humanoid leg -->
+<joint name="left_hip_pitch" type="revolute">
+  <parent>torso</parent>
+  <child>left_upper_leg</child>
+  <pose>0 0.1 -0.15 0 0 0</pose>
+  <axis>
+    <xyz>0 1 0</xyz>  <!-- Rotation around Y axis -->
+    <limit>
+      <lower>-1.57</lower>   <!-- -90 degrees -->
+      <upper>1.57</upper>    <!-- +90 degrees -->
+      <effort>100.0</effort> <!-- Max torque in N*m -->
+      <velocity>6.28</velocity> <!-- Max velocity in rad/s -->
+    </limit>
+    <dynamics>
+      <damping>0.5</damping>   <!-- Joint damping (N*m*s/rad) -->
+      <friction>0.1</friction> <!-- Joint friction (N*m) -->
+      <spring_stiffness>0.0</spring_stiffness>
+      <spring_reference>0.0</spring_reference>
+    </dynamics>
+  </axis>
+</joint>
+
+<!-- Knee joint with joint limits -->
+<joint name="left_knee" type="revolute">
+  <parent>left_upper_leg</parent>
+  <child>left_lower_leg</child>
+  <axis>
+    <xyz>0 1 0</xyz>
+    <limit>
+      <lower>0.0</lower>    <!-- Knee only bends one way -->
+      <upper>2.61</upper>   <!-- ~150 degrees -->
+      <effort>80.0</effort>
+      <velocity>6.28</velocity>
+    </limit>
+    <dynamics>
+      <damping>0.3</damping>
+      <friction>0.05</friction>
+    </dynamics>
+  </axis>
+</joint>
+```
+
+### Controlling Joints Programmatically
+
+```python
+import rclpy
+from rclpy.node import Node
+from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
+from builtin_interfaces.msg import Duration
+
+class HumanoidJointController(Node):
+    """Send joint commands to a simulated humanoid robot."""
+    
+    def __init__(self):
+        super().__init__('joint_controller')
+        self.publisher = self.create_publisher(
+            JointTrajectory,
+            '/humanoid/joint_trajectory_controller/joint_trajectory',
+            10
+        )
+        self.timer = self.create_timer(2.0, self.send_command)
+        self.get_logger().info('Joint controller initialized')
+    
+    def send_command(self):
+        """Command the robot to a standing pose."""
+        msg = JointTrajectory()
+        msg.joint_names = [
+            'left_hip_pitch', 'left_knee', 'left_ankle_pitch',
+            'right_hip_pitch', 'right_knee', 'right_ankle_pitch'
+        ]
+        
+        point = JointTrajectoryPoint()
+        # Standing pose: slight bend in knees
+        point.positions = [0.0, 0.1, 0.0,   # Left leg
+                           0.0, 0.1, 0.0]    # Right leg
+        point.velocities = [0.0] * 6
+        point.time_from_start = Duration(sec=1, nanosec=0)
+        
+        msg.points = [point]
+        self.publisher.publish(msg)
+        self.get_logger().info('Sent standing pose command')
+
+def main():
+    rclpy.init()
+    controller = HumanoidJointController()
+    rclpy.spin(controller)
+    rclpy.shutdown()
+```
+
+## Collision Detection
+
+Collision detection determines when and where objects come into contact. For humanoid robots, accurate collision handling is critical for foot-ground interaction, grasping, and self-collision avoidance.
+
+### Collision Detection Pipeline
+
+```
+┌─────────────────┐    ┌──────────────────┐    ┌─────────────────┐
+│   Broad Phase    │───▶│   Narrow Phase    │───▶│   Contact       │
+│   (AABB Trees)   │    │   (GJK/EPA)       │    │   Resolution    │
+│                  │    │                    │    │                 │
+│  Quickly reject  │    │  Exact geometry    │    │  Forces and     │
+│  distant pairs   │    │  intersection      │    │  impulses       │
+└─────────────────┘    └──────────────────┘    └─────────────────┘
+```
+
+1. **Broad Phase**: Uses bounding volumes (Axis-Aligned Bounding Boxes) to quickly determine which object pairs might be colliding. This eliminates most of the O(n^2) pair checks.
+
+2. **Narrow Phase**: For pairs that pass the broad phase, exact geometry intersection tests are performed using algorithms like GJK (Gilbert-Johnson-Keerthi) and EPA (Expanding Polytope Algorithm).
+
+3. **Contact Resolution**: Once contact points are identified, the physics engine computes contact forces using constraint solvers.
+
+### Collision Geometry Best Practices
+
+```xml
+<!-- Use simplified collision geometry, detailed visual geometry -->
+<link name="left_hand">
+  <!-- Visual: high-detail mesh for rendering -->
+  <visual name="hand_visual">
+    <geometry>
+      <mesh>
+        <uri>meshes/hand_detailed.dae</uri>
+        <scale>1 1 1</scale>
+      </mesh>
+    </geometry>
+  </visual>
+  
+  <!-- Collision: simplified geometry for performance -->
+  <collision name="hand_collision_palm">
+    <pose>0 0 0 0 0 0</pose>
+    <geometry>
+      <box>
+        <size>0.08 0.10 0.03</size>
+      </box>
+    </geometry>
+  </collision>
+  <collision name="hand_collision_fingers">
+    <pose>0 0.06 0 0 0 0</pose>
+    <geometry>
+      <box>
+        <size>0.07 0.06 0.02</size>
+      </box>
+    </geometry>
+  </collision>
+</link>
+```
+
+### Self-Collision Filtering
+
+Humanoid robots have many links that are always in proximity (e.g., upper arm and torso). You need to disable collision checking between adjacent links:
+
+```xml
+<!-- Disable self-collision between connected links -->
+<model name="humanoid">
+  <self_collide>true</self_collide>
+  
+  <!-- Disable collisions between adjacent links -->
+  <disable_collision>
+    <link1>torso</link1>
+    <link2>left_upper_arm</link2>
+  </disable_collision>
+  <disable_collision>
+    <link1>left_upper_arm</link1>
+    <link2>left_lower_arm</link2>
+  </disable_collision>
+</model>
+```
+
+## Friction and Contact Models
+
+Friction is essential for humanoid locomotion. Without proper friction, the robot's feet will slide on the ground and walking is impossible.
+
+### Coulomb Friction Model
+
+Gazebo uses the **Coulomb friction model** as its primary friction model:
+
+```
+F_friction <= mu * F_normal
+
+Where:
+  F_friction = tangential friction force (N)
+  mu         = coefficient of friction (dimensionless)
+  F_normal   = normal contact force (N)
+```
+
+Two friction coefficients are used:
+- **mu (mu1)**: Primary friction direction
+- **mu2**: Secondary friction direction (perpendicular to mu1)
+
+### Configuring Friction
+
+```xml
+<!-- Ground surface with realistic rubber-on-concrete friction -->
+<surface>
+  <friction>
+    <ode>
+      <mu>1.0</mu>    <!-- Static friction coefficient -->
+      <mu2>1.0</mu2>  <!-- Lateral friction coefficient -->
+      <fdir1>0 0 1</fdir1> <!-- Primary friction direction -->
+      <slip1>0.0</slip1>   <!-- Slip in primary direction -->
+      <slip2>0.0</slip2>   <!-- Slip in secondary direction -->
+    </ode>
+    <bullet>
+      <friction>1.0</friction>
+      <friction2>1.0</friction2>
+    </bullet>
+  </friction>
+  <contact>
+    <ode>
+      <soft_cfm>0.0</soft_cfm>       <!-- Constraint force mixing -->
+      <soft_erp>0.2</soft_erp>       <!-- Error reduction parameter -->
+      <kp>1e6</kp>                    <!-- Contact stiffness -->
+      <kd>100.0</kd>                  <!-- Contact damping -->
+      <max_vel>0.01</max_vel>         <!-- Max contact correction velocity -->
+      <min_depth>0.001</min_depth>    <!-- Min penetration before correction -->
+    </ode>
+  </contact>
+</surface>
+```
+
+### Common Friction Coefficients
+
+| Material Pair | mu (approximate) |
+|---------------|-----------------|
+| Rubber on concrete | 0.8 - 1.0 |
+| Rubber on wood | 0.7 - 0.8 |
+| Rubber on wet surface | 0.4 - 0.5 |
+| Metal on metal | 0.3 - 0.5 |
+| Plastic on plastic | 0.2 - 0.4 |
+| Ice surface | 0.01 - 0.05 |
+
+## Gravity and Environmental Forces
+
+### Configuring Gravity
+
+```xml
+<world name="test_world">
+  <!-- Earth gravity -->
+  <gravity>0 0 -9.81</gravity>
+  
+  <!-- Lunar gravity (for testing low-gravity scenarios) -->
+  <!-- <gravity>0 0 -1.62</gravity> -->
+  
+  <!-- Mars gravity -->
+  <!-- <gravity>0 0 -3.72</gravity> -->
+  
+  <!-- Zero gravity (space robotics) -->
+  <!-- <gravity>0 0 0.0</gravity> -->
+</world>
+```
+
+### Wind Effects
+
+Gazebo can simulate wind forces on your robot:
+
+```xml
+<plugin filename="gz-sim-wind-system" name="gz::sim::systems::Wind">
+  <horizontal>
+    <magnitude>
+      <time_for_rise>10</time_for_rise>
+      <sin>
+        <amplitude_percent>0.05</amplitude_percent>
+        <period>60</period>
+      </sin>
+      <noise type="gaussian">
+        <mean>0</mean>
+        <stddev>0.5</stddev>
+      </noise>
+    </magnitude>
+    <direction>
+      <time_for_rise>30</time_for_rise>
+      <sin>
+        <amplitude>5</amplitude>
+        <period>120</period>
+      </sin>
+    </direction>
+  </horizontal>
+  <force_approximation_scaling_factor>1.0</force_approximation_scaling_factor>
+</plugin>
+```
+
+## Simulation Step Size and Solver Configuration
+
+The **step size** determines how finely the physics is discretized. Smaller steps are more accurate but slower.
+
+### Step Size Guidelines
+
+| Step Size | Use Case | Notes |
+|-----------|----------|-------|
+| 0.01 s (100 Hz) | Rough testing, fast iteration | May miss fast contacts |
+| 0.001 s (1 kHz) | Standard humanoid simulation | Good balance of speed and accuracy |
+| 0.0005 s (2 kHz) | High-fidelity contact, RL training | Slower but more stable |
+| 0.0001 s (10 kHz) | Precision manipulation | Very slow, rarely needed |
+
+### Full Physics Configuration
+
+```xml
+<physics name="humanoid_physics" type="dart">
+  <!-- Simulation step size: 1ms for humanoid stability -->
+  <max_step_size>0.001</max_step_size>
+  
+  <!-- Run at real-time (1.0) or faster for training -->
+  <real_time_factor>1.0</real_time_factor>
+  
+  <!-- Physics update rate -->
+  <real_time_update_rate>1000</real_time_update_rate>
+  
+  <dart>
+    <solver>
+      <!-- dantzig (default), pgs (faster, less accurate) -->
+      <solver_type>dantzig</solver_type>
+      <!-- More iterations = more accurate but slower -->
+      <max_contacts>20</max_contacts>
+    </solver>
+    <collision_detector>fcl</collision_detector>
+  </dart>
+</physics>
+```
+
+### Performance Tuning Script
+
+```python
+import subprocess
+import time
+
+def benchmark_physics_config(world_file, step_sizes, duration=10.0):
+    """Benchmark different physics configurations.
+    
+    Runs the simulation for a fixed duration with different step sizes
+    and measures real-time factor and stability.
+    """
+    results = []
+    
+    for step_size in step_sizes:
+        print(f"\nTesting step_size={step_size}s...")
+        
+        # Modify the world file step size (simplified)
+        modify_step_size(world_file, step_size)
+        
+        start_time = time.time()
+        
+        # Run simulation headless for benchmarking
+        proc = subprocess.Popen(
+            ['gz', 'sim', '-r', '-s', '--iterations',
+             str(int(duration / step_size)), world_file],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE
+        )
+        proc.wait()
+        
+        wall_time = time.time() - start_time
+        sim_time = duration
+        rtf = sim_time / wall_time
+        
+        results.append({
+            'step_size': step_size,
+            'wall_time': round(wall_time, 2),
+            'real_time_factor': round(rtf, 2),
+            'steps': int(duration / step_size)
+        })
+        
+        print(f"  Wall time: {wall_time:.2f}s, RTF: {rtf:.2f}")
+    
+    return results
+
+def modify_step_size(world_file, new_step_size):
+    """Update the max_step_size in an SDF world file."""
+    import xml.etree.ElementTree as ET
+    tree = ET.parse(world_file)
+    root = tree.getroot()
+    
+    for step_elem in root.iter('max_step_size'):
+        step_elem.text = str(new_step_size)
+    
+    tree.write(world_file)
+
+# Example usage
+if __name__ == '__main__':
+    results = benchmark_physics_config(
+        'humanoid_world.sdf',
+        step_sizes=[0.01, 0.005, 0.001, 0.0005]
+    )
+    for r in results:
+        print(f"Step: {r['step_size']}s | RTF: {r['real_time_factor']} | "
+              f"Steps: {r['steps']}")
+```
+
+## Common Physics Problems and Solutions
+
+### Problem 1: Robot Jittering at Rest
+
+**Symptom**: The robot vibrates or oscillates when it should be stationary.
+
+**Cause**: Contact stiffness (kp) too high or solver iterations too low.
+
+**Fix**:
+```xml
+<contact>
+  <ode>
+    <kp>1e5</kp>    <!-- Reduce from 1e6 -->
+    <kd>200.0</kd>  <!-- Increase damping -->
+  </ode>
+</contact>
+```
+
+### Problem 2: Links Penetrating Each Other
+
+**Symptom**: Bodies pass through each other instead of colliding.
+
+**Cause**: Step size too large or max_vel correction too low.
+
+**Fix**:
+```xml
+<physics name="fixed_physics" type="dart">
+  <max_step_size>0.0005</max_step_size>  <!-- Decrease step size -->
+</physics>
+<contact>
+  <ode>
+    <max_vel>0.1</max_vel>          <!-- Increase correction velocity -->
+    <min_depth>0.0005</min_depth>   <!-- Decrease penetration threshold -->
+  </ode>
+</contact>
+```
+
+### Problem 3: Robot Slides on Flat Ground
+
+**Symptom**: The robot slowly drifts when standing still.
+
+**Cause**: Friction coefficients too low or slip values too high.
+
+**Fix**:
+```xml
+<friction>
+  <ode>
+    <mu>1.2</mu>      <!-- Increase friction -->
+    <mu2>1.2</mu2>
+    <slip1>0.0</slip1> <!-- Remove any slip -->
+    <slip2>0.0</slip2>
+  </ode>
+</friction>
+```
+
+## Building a Complete Humanoid World
+
+Here is a complete SDF world file suitable for humanoid robot testing:
+
+```xml
+<?xml version="1.0" ?>
+<sdf version="1.9">
+  <world name="humanoid_test_world">
+    
+    <!-- Physics configuration optimized for humanoids -->
+    <physics name="humanoid_physics" type="dart">
+      <max_step_size>0.001</max_step_size>
+      <real_time_factor>1.0</real_time_factor>
+      <real_time_update_rate>1000</real_time_update_rate>
+    </physics>
+
+    <gravity>0 0 -9.81</gravity>
+
+    <!-- Lighting -->
+    <light type="directional" name="sun">
+      <cast_shadows>true</cast_shadows>
+      <pose>0 0 10 0 0 0</pose>
+      <diffuse>0.8 0.8 0.8 1</diffuse>
+      <specular>0.2 0.2 0.2 1</specular>
+      <direction>-0.5 0.1 -0.9</direction>
+    </light>
+
+    <!-- Ground plane with friction for walking -->
+    <model name="ground_plane">
+      <static>true</static>
+      <link name="link">
+        <collision name="collision">
+          <geometry>
+            <plane>
+              <normal>0 0 1</normal>
+              <size>50 50</size>
+            </plane>
+          </geometry>
+          <surface>
+            <friction>
+              <ode>
+                <mu>1.0</mu>
+                <mu2>1.0</mu2>
+              </ode>
+            </friction>
+            <contact>
+              <ode>
+                <kp>1e6</kp>
+                <kd>100</kd>
+              </ode>
+            </contact>
+          </surface>
+        </collision>
+        <visual name="visual">
+          <geometry>
+            <plane>
+              <normal>0 0 1</normal>
+              <size>50 50</size>
+            </plane>
+          </geometry>
+          <material>
+            <ambient>0.8 0.8 0.8 1</ambient>
+            <diffuse>0.8 0.8 0.8 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- Obstacle: a box to step over -->
+    <model name="step_obstacle">
+      <static>true</static>
+      <pose>2.0 0 0.05 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry>
+            <box><size>0.5 1.0 0.1</size></box>
+          </geometry>
+        </collision>
+        <visual name="visual">
+          <geometry>
+            <box><size>0.5 1.0 0.1</size></box>
+          </geometry>
+          <material>
+            <ambient>0.6 0.3 0.1 1</ambient>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- Stairs for testing locomotion -->
+    <model name="stairs">
+      <static>true</static>
+      <pose>4.0 0 0 0 0 0</pose>
+      <link name="step1">
+        <pose>0 0 0.075 0 0 0</pose>
+        <collision name="col"><geometry><box><size>0.3 1.0 0.15</size></box></geometry></collision>
+        <visual name="vis"><geometry><box><size>0.3 1.0 0.15</size></box></geometry></visual>
+      </link>
+      <link name="step2">
+        <pose>0.3 0 0.225 0 0 0</pose>
+        <collision name="col"><geometry><box><size>0.3 1.0 0.15</size></box></geometry></collision>
+        <visual name="vis"><geometry><box><size>0.3 1.0 0.15</size></box></geometry></visual>
+      </link>
+      <link name="step3">
+        <pose>0.6 0 0.375 0 0 0</pose>
+        <collision name="col"><geometry><box><size>0.3 1.0 0.15</size></box></geometry></collision>
+        <visual name="vis"><geometry><box><size>0.3 1.0 0.15</size></box></geometry></visual>
+      </link>
+    </model>
+
+  </world>
+</sdf>
+```
+
+## Summary
+
+Key takeaways from this chapter:
+
+1. **DART** is the recommended physics engine for humanoid simulation due to its Featherstone algorithm and accurate contact handling.
+2. **Inertia tensors** must be correctly specified for every link -- incorrect values cause instability.
+3. **Step size** of 0.001s (1 kHz) is the standard starting point for humanoid robots.
+4. **Friction** coefficients around 0.8-1.0 are typical for rubber feet on hard surfaces.
+5. **Collision geometry** should be simplified compared to visual geometry for performance.
+6. Physics problems (jitter, penetration, sliding) are almost always fixable through parameter tuning.
+
+## Exercises
+
+1. **Physics Engine Comparison**: Create a simple world with a box falling onto a plane. Run the simulation with ODE, Bullet, and DART. Measure the contact bounce behavior and simulation speed for each engine.
+
+2. **Inertia Calculation**: Given a humanoid robot leg with an upper leg (cylinder: mass 5 kg, radius 0.05 m, length 0.4 m) and lower leg (cylinder: mass 3 kg, radius 0.04 m, length 0.35 m), compute the inertia tensors for both links using the provided Python functions and write the corresponding SDF.
+
+3. **Friction Investigation**: Create a world with a ramp at 30 degrees. Place a box with mass 1 kg on the ramp and vary the friction coefficient from 0.1 to 1.0. At what coefficient does the box stop sliding? Compare with the theoretical value (mu = tan(30) = 0.577).
+
+4. **World Building**: Create a complete SDF world file for testing a humanoid robot's navigation capabilities. Include flat ground, a ramp, stairs, and at least two obstacles.
+
+## Next Steps
+
+Continue to [Sensor Simulation](./sensor-simulation) to learn how to add cameras, LiDAR, IMUs, and force/torque sensors to your Gazebo simulation.

@@ -1,0 +1,328 @@
+---
+sidebar_position: 4
+title: "Launch Files"
+description: "Creating launch files to start complex robot systems"
+---
+
+# ROS 2 Launch Files
+
+Launch files allow you to start multiple nodes, set parameters, and configure your robot system with a single command.
+
+## Python Launch Files
+
+ROS 2 uses Python for launch files, providing flexibility and programmatic control.
+
+### Basic Launch File
+
+```python
+# launch/robot_launch.py
+from launch import LaunchDescription
+from launch_ros.actions import Node
+
+def generate_launch_description():
+    return LaunchDescription([
+        Node(
+            package='my_humanoid_pkg',
+            executable='robot_controller',
+            name='robot_controller',
+            output='screen',
+        ),
+        Node(
+            package='my_humanoid_pkg',
+            executable='sensor_processor',
+            name='sensor_processor',
+            output='screen',
+        ),
+    ])
+```
+
+### Launch File with Parameters
+
+```python
+# launch/humanoid_bringup.py
+import os
+from ament_index_python.packages import get_package_share_directory
+from launch import LaunchDescription
+from launch_ros.actions import Node
+from launch.actions import DeclareLaunchArgument
+from launch.substitutions import LaunchConfiguration
+
+def generate_launch_description():
+    # Get package directory
+    pkg_dir = get_package_share_directory('my_humanoid_pkg')
+    
+    # Declare launch arguments
+    robot_name_arg = DeclareLaunchArgument(
+        'robot_name',
+        default_value='humanoid_1',
+        description='Name of the robot'
+    )
+    
+    control_rate_arg = DeclareLaunchArgument(
+        'control_rate',
+        default_value='100.0',
+        description='Control loop rate in Hz'
+    )
+    
+    # Parameter file path
+    params_file = os.path.join(pkg_dir, 'config', 'robot_params.yaml')
+    
+    # Nodes
+    controller_node = Node(
+        package='my_humanoid_pkg',
+        executable='robot_controller',
+        name='robot_controller',
+        output='screen',
+        parameters=[
+            params_file,
+            {
+                'robot_name': LaunchConfiguration('robot_name'),
+                'control_rate': LaunchConfiguration('control_rate'),
+            }
+        ],
+        remappings=[
+            ('/cmd_vel', '/humanoid/cmd_vel'),
+            ('/joint_states', '/humanoid/joint_states'),
+        ]
+    )
+    
+    sensor_node = Node(
+        package='my_humanoid_pkg',
+        executable='sensor_processor',
+        name='sensor_processor',
+        output='screen',
+        parameters=[params_file],
+    )
+    
+    return LaunchDescription([
+        robot_name_arg,
+        control_rate_arg,
+        controller_node,
+        sensor_node,
+    ])
+```
+
+### Running Launch Files
+
+```bash
+# Basic launch
+ros2 launch my_humanoid_pkg robot_launch.py
+
+# With arguments
+ros2 launch my_humanoid_pkg humanoid_bringup.py \
+    robot_name:=my_robot \
+    control_rate:=200.0
+```
+
+## Advanced Launch Features
+
+### Conditional Logic
+
+```python
+from launch.conditions import IfCondition, UnlessCondition
+from launch.substitutions import LaunchConfiguration
+
+def generate_launch_description():
+    use_sim_arg = DeclareLaunchArgument(
+        'use_sim',
+        default_value='false',
+        description='Use simulation'
+    )
+    
+    # Only launch if use_sim is true
+    sim_node = Node(
+        package='gazebo_ros',
+        executable='spawn_entity.py',
+        condition=IfCondition(LaunchConfiguration('use_sim')),
+    )
+    
+    # Only launch if use_sim is false
+    hardware_node = Node(
+        package='my_humanoid_pkg',
+        executable='hardware_interface',
+        condition=UnlessCondition(LaunchConfiguration('use_sim')),
+    )
+    
+    return LaunchDescription([
+        use_sim_arg,
+        sim_node,
+        hardware_node,
+    ])
+```
+
+### Including Other Launch Files
+
+```python
+from launch.actions import IncludeLaunchDescription
+from launch.launch_description_sources import PythonLaunchDescriptionSource
+
+def generate_launch_description():
+    pkg_dir = get_package_share_directory('my_humanoid_pkg')
+    
+    # Include another launch file
+    sensors_launch = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            os.path.join(pkg_dir, 'launch', 'sensors.launch.py')
+        ),
+        launch_arguments={
+            'use_lidar': 'true',
+            'use_camera': 'true',
+        }.items()
+    )
+    
+    return LaunchDescription([
+        sensors_launch,
+        # ... other nodes
+    ])
+```
+
+### Groups and Namespaces
+
+```python
+from launch_ros.actions import PushRosNamespace
+from launch.actions import GroupAction
+
+def generate_launch_description():
+    # Group nodes under a namespace
+    robot_group = GroupAction([
+        PushRosNamespace('humanoid'),
+        Node(
+            package='my_humanoid_pkg',
+            executable='robot_controller',
+        ),
+        Node(
+            package='my_humanoid_pkg',
+            executable='sensor_processor',
+        ),
+    ])
+    
+    return LaunchDescription([robot_group])
+```
+
+## Complete Humanoid Launch Example
+
+```python
+# launch/full_humanoid_bringup.py
+import os
+from ament_index_python.packages import get_package_share_directory
+from launch import LaunchDescription
+from launch.actions import (
+    DeclareLaunchArgument,
+    IncludeLaunchDescription,
+    GroupAction,
+    TimerAction,
+)
+from launch.conditions import IfCondition
+from launch.launch_description_sources import PythonLaunchDescriptionSource
+from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
+from launch_ros.actions import Node, PushRosNamespace
+
+def generate_launch_description():
+    pkg_dir = get_package_share_directory('my_humanoid_pkg')
+    
+    # Launch arguments
+    args = [
+        DeclareLaunchArgument('robot_name', default_value='humanoid'),
+        DeclareLaunchArgument('use_sim', default_value='true'),
+        DeclareLaunchArgument('use_rviz', default_value='true'),
+    ]
+    
+    # Parameter files
+    controller_params = os.path.join(pkg_dir, 'config', 'controller.yaml')
+    sensor_params = os.path.join(pkg_dir, 'config', 'sensors.yaml')
+    
+    # Robot state publisher
+    robot_state_publisher = Node(
+        package='robot_state_publisher',
+        executable='robot_state_publisher',
+        parameters=[{
+            'robot_description': open(
+                os.path.join(pkg_dir, 'urdf', 'humanoid.urdf')
+            ).read()
+        }]
+    )
+    
+    # Controller nodes
+    controller_nodes = GroupAction([
+        PushRosNamespace(LaunchConfiguration('robot_name')),
+        
+        Node(
+            package='my_humanoid_pkg',
+            executable='robot_controller',
+            parameters=[controller_params],
+            output='screen',
+        ),
+        
+        Node(
+            package='my_humanoid_pkg',
+            executable='balance_controller',
+            parameters=[controller_params],
+            output='screen',
+        ),
+    ])
+    
+    # Sensor nodes
+    sensor_nodes = GroupAction([
+        PushRosNamespace(LaunchConfiguration('robot_name')),
+        
+        Node(
+            package='my_humanoid_pkg',
+            executable='imu_processor',
+            parameters=[sensor_params],
+        ),
+        
+        Node(
+            package='my_humanoid_pkg',
+            executable='camera_processor',
+            parameters=[sensor_params],
+        ),
+    ])
+    
+    # RViz visualization
+    rviz_node = Node(
+        package='rviz2',
+        executable='rviz2',
+        arguments=['-d', os.path.join(pkg_dir, 'rviz', 'humanoid.rviz')],
+        condition=IfCondition(LaunchConfiguration('use_rviz')),
+    )
+    
+    # Delay RViz start
+    delayed_rviz = TimerAction(
+        period=2.0,
+        actions=[rviz_node],
+    )
+    
+    return LaunchDescription(
+        args + [
+            robot_state_publisher,
+            controller_nodes,
+            sensor_nodes,
+            delayed_rviz,
+        ]
+    )
+```
+
+## Summary
+
+| Feature | Purpose |
+|---------|---------|
+| `Node` | Start a single node |
+| `DeclareLaunchArgument` | Define configurable arguments |
+| `LaunchConfiguration` | Use argument values |
+| `IncludeLaunchDescription` | Include other launch files |
+| `GroupAction` | Group actions together |
+| `PushRosNamespace` | Apply namespace to nodes |
+| `IfCondition` | Conditional execution |
+| `TimerAction` | Delayed execution |
+
+## Exercises
+
+1. Create a launch file that starts your robot controller with configurable parameters.
+
+2. Add conditional logic to switch between simulation and hardware modes.
+
+3. Create a modular launch system with separate files for sensors, controllers, and visualization.
+
+## Next Steps
+
+Continue to [URDF for Humanoids](./urdf-humanoids) to learn how to describe your robot's physical structure.

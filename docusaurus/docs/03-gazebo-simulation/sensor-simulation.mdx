@@ -1,0 +1,991 @@
+---
+sidebar_position: 3
+title: "Sensor Simulation"
+description: "Simulating cameras, LiDAR, IMU, depth sensors, and force/torque sensors in Gazebo with ROS 2 integration"
+---
+
+# Sensor Simulation in Gazebo
+
+One of Gazebo's greatest strengths is its ability to simulate a wide variety of sensors with configurable noise models. This lets you develop and test perception algorithms entirely in simulation before deploying them on a real robot. In this chapter, you will learn to add simulated cameras, LiDAR, IMUs, depth sensors, and force/torque sensors to your humanoid robot, connect them to ROS 2, and process the data programmatically.
+
+## Learning Objectives
+
+By the end of this chapter, you will be able to:
+
+1. **Add** simulated sensors to a robot model using SDF
+2. **Configure** realistic noise models for each sensor type
+3. **Bridge** Gazebo sensor data to ROS 2 topics using `ros_gz_bridge`
+4. **Write** Python nodes that process simulated sensor data
+5. **Understand** the trade-offs between sensor fidelity and simulation performance
+6. **Debug** common sensor simulation issues
+
+## Sensor Simulation Architecture
+
+Gazebo simulates sensors through a plugin system. Each sensor type has a corresponding system plugin that computes sensor readings at each simulation step.
+
+```
+┌──────────────────────────────────────────────────────────┐
+│                    Gazebo Simulation                      │
+│                                                          │
+│  ┌──────────┐  ┌──────────┐  ┌──────────┐              │
+│  │  Camera   │  │  LiDAR   │  │   IMU    │  ...sensors  │
+│  │  Plugin   │  │  Plugin  │  │  Plugin  │              │
+│  └────┬─────┘  └────┬─────┘  └────┬─────┘              │
+│       │              │             │                     │
+│       ▼              ▼             ▼                     │
+│  ┌──────────────────────────────────────────┐           │
+│  │         Gazebo Transport (gz-transport)   │           │
+│  └──────────────────┬───────────────────────┘           │
+└─────────────────────┼────────────────────────────────────┘
+                      │
+                      ▼
+              ┌───────────────┐
+              │  ros_gz_bridge │
+              └───────┬───────┘
+                      │
+                      ▼
+              ┌───────────────┐
+              │   ROS 2 Topics │
+              │  /camera/image │
+              │  /scan         │
+              │  /imu/data     │
+              └───────────────┘
+```
+
+## Camera Sensors
+
+Cameras are the most common sensor in robotics. Gazebo can simulate RGB cameras, stereo cameras, and wide-angle cameras with configurable resolution, field of view, and noise.
+
+### Adding a Camera to Your Robot
+
+```xml
+<!-- camera_sensor.sdf -- Adding an RGB camera to a humanoid head -->
+<link name="head">
+  <sensor name="head_camera" type="camera">
+    <pose>0.05 0 0.02 0 0 0</pose>  <!-- Slightly forward and up -->
+    <always_on>true</always_on>
+    <update_rate>30</update_rate>     <!-- 30 FPS -->
+    <visualize>true</visualize>
+    
+    <camera>
+      <horizontal_fov>1.3962634</horizontal_fov>  <!-- 80 degrees -->
+      <image>
+        <width>640</width>
+        <height>480</height>
+        <format>R8G8B8</format>
+      </image>
+      <clip>
+        <near>0.02</near>
+        <far>100</far>
+      </clip>
+      <noise>
+        <type>gaussian</type>
+        <mean>0.0</mean>
+        <stddev>0.007</stddev>  <!-- Realistic camera noise -->
+      </noise>
+      <distortion>
+        <k1>-0.25</k1>
+        <k2>0.12</k2>
+        <k3>0.0</k3>
+        <p1>-0.00028</p1>
+        <p2>-0.00005</p2>
+        <center>0.5 0.5</center>
+      </distortion>
+    </camera>
+  </sensor>
+</link>
+```
+
+### Stereo Camera Setup
+
+Stereo cameras provide depth perception through triangulation of two offset images:
+
+```xml
+<!-- Stereo camera pair on the humanoid head -->
+<link name="head">
+  <!-- Left camera -->
+  <sensor name="left_camera" type="camera">
+    <pose>0.05 0.03 0.02 0 0 0</pose>  <!-- 6cm baseline -->
+    <always_on>true</always_on>
+    <update_rate>30</update_rate>
+    <camera>
+      <horizontal_fov>1.3962634</horizontal_fov>
+      <image>
+        <width>640</width>
+        <height>480</height>
+        <format>R8G8B8</format>
+      </image>
+      <clip><near>0.02</near><far>100</far></clip>
+    </camera>
+  </sensor>
+  
+  <!-- Right camera -->
+  <sensor name="right_camera" type="camera">
+    <pose>0.05 -0.03 0.02 0 0 0</pose>  <!-- 6cm offset -->
+    <always_on>true</always_on>
+    <update_rate>30</update_rate>
+    <camera>
+      <horizontal_fov>1.3962634</horizontal_fov>
+      <image>
+        <width>640</width>
+        <height>480</height>
+        <format>R8G8B8</format>
+      </image>
+      <clip><near>0.02</near><far>100</far></clip>
+    </camera>
+  </sensor>
+</link>
+```
+
+### Processing Camera Data in ROS 2
+
+```python
+import rclpy
+from rclpy.node import Node
+from sensor_msgs.msg import Image
+from cv_bridge import CvBridge
+import cv2
+import numpy as np
+
+class CameraSubscriber(Node):
+    """Subscribe to simulated camera images and run object detection."""
+    
+    def __init__(self):
+        super().__init__('camera_subscriber')
+        self.bridge = CvBridge()
+        
+        self.subscription = self.create_subscription(
+            Image,
+            '/humanoid/head_camera/image',
+            self.image_callback,
+            10
+        )
+        self.get_logger().info('Camera subscriber initialized')
+    
+    def image_callback(self, msg):
+        """Process incoming camera images."""
+        # Convert ROS Image message to OpenCV format
+        cv_image = self.bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8')
+        
+        # Get image properties
+        height, width, channels = cv_image.shape
+        self.get_logger().info(
+            f'Received image: {width}x{height}, {channels} channels'
+        )
+        
+        # Example: Simple edge detection
+        gray = cv2.cvtColor(cv_image, cv2.COLOR_BGR2GRAY)
+        edges = cv2.Canny(gray, threshold1=50, threshold2=150)
+        
+        # Example: Detect objects by color (e.g., red obstacles)
+        hsv = cv2.cvtColor(cv_image, cv2.COLOR_BGR2HSV)
+        red_mask = cv2.inRange(hsv, 
+                               np.array([0, 100, 100]), 
+                               np.array([10, 255, 255]))
+        contours, _ = cv2.findContours(
+            red_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+        )
+        
+        if contours:
+            largest = max(contours, key=cv2.contourArea)
+            area = cv2.contourArea(largest)
+            if area > 500:  # Minimum area threshold
+                M = cv2.moments(largest)
+                cx = int(M['m10'] / M['m00'])
+                cy = int(M['m01'] / M['m00'])
+                self.get_logger().info(
+                    f'Red object detected at pixel ({cx}, {cy}), area={area}'
+                )
+
+def main():
+    rclpy.init()
+    node = CameraSubscriber()
+    rclpy.spin(node)
+    rclpy.shutdown()
+
+if __name__ == '__main__':
+    main()
+```
+
+## Depth Sensors
+
+Depth sensors provide per-pixel distance measurements, essential for 3D perception and obstacle avoidance.
+
+### RGBD Camera (Depth Camera)
+
+```xml
+<!-- Intel RealSense-style depth camera -->
+<sensor name="depth_camera" type="depth_camera">
+  <pose>0.05 0 0.02 0 0 0</pose>
+  <always_on>true</always_on>
+  <update_rate>30</update_rate>
+  <visualize>true</visualize>
+  
+  <camera>
+    <horizontal_fov>1.2112585</horizontal_fov>  <!-- 69.4 degrees -->
+    <image>
+      <width>640</width>
+      <height>480</height>
+      <format>R_FLOAT32</format>
+    </image>
+    <clip>
+      <near>0.1</near>
+      <far>10.0</far>
+    </clip>
+    <noise>
+      <type>gaussian</type>
+      <mean>0.0</mean>
+      <stddev>0.005</stddev>  <!-- 5mm noise standard deviation -->
+    </noise>
+  </camera>
+</sensor>
+```
+
+### Processing Depth Data
+
+```python
+import rclpy
+from rclpy.node import Node
+from sensor_msgs.msg import Image, PointCloud2
+from cv_bridge import CvBridge
+import numpy as np
+
+class DepthProcessor(Node):
+    """Process depth camera data for obstacle detection."""
+    
+    def __init__(self):
+        super().__init__('depth_processor')
+        self.bridge = CvBridge()
+        
+        self.depth_sub = self.create_subscription(
+            Image,
+            '/humanoid/depth_camera/depth_image',
+            self.depth_callback,
+            10
+        )
+        
+        # Camera intrinsics (must match your SDF configuration)
+        self.fx = 554.25  # Focal length x (pixels)
+        self.fy = 554.25  # Focal length y (pixels)
+        self.cx = 320.0   # Principal point x
+        self.cy = 240.0   # Principal point y
+        
+    def depth_callback(self, msg):
+        """Process depth image to find obstacles."""
+        depth_image = self.bridge.imgmsg_to_cv2(
+            msg, desired_encoding='32FC1'
+        )
+        
+        # Find closest obstacle in the center region
+        h, w = depth_image.shape
+        center_region = depth_image[
+            h//3 : 2*h//3,  # Middle third vertically
+            w//3 : 2*w//3   # Middle third horizontally
+        ]
+        
+        # Filter out invalid readings (0 or inf)
+        valid_depths = center_region[
+            (center_region > 0.1) & (center_region < 10.0)
+        ]
+        
+        if len(valid_depths) > 0:
+            min_distance = np.min(valid_depths)
+            mean_distance = np.mean(valid_depths)
+            self.get_logger().info(
+                f'Closest obstacle: {min_distance:.2f}m, '
+                f'Mean depth: {mean_distance:.2f}m'
+            )
+            
+            if min_distance < 0.5:
+                self.get_logger().warn('OBSTACLE WARNING: Object within 0.5m!')
+    
+    def depth_to_pointcloud(self, depth_image):
+        """Convert depth image to 3D point cloud.
+        
+        Uses the pinhole camera model to back-project each pixel
+        into 3D space.
+        """
+        h, w = depth_image.shape
+        
+        # Create pixel coordinate grids
+        u = np.arange(w)
+        v = np.arange(h)
+        u, v = np.meshgrid(u, v)
+        
+        # Back-project to 3D
+        z = depth_image
+        x = (u - self.cx) * z / self.fx
+        y = (v - self.cy) * z / self.fy
+        
+        # Stack into Nx3 point cloud
+        points = np.stack([x, y, z], axis=-1)
+        
+        # Filter invalid points
+        valid_mask = (z > 0.1) & (z < 10.0)
+        points = points[valid_mask]
+        
+        return points
+
+def main():
+    rclpy.init()
+    node = DepthProcessor()
+    rclpy.spin(node)
+    rclpy.shutdown()
+```
+
+## LiDAR Sensors
+
+LiDAR (Light Detection and Ranging) sensors emit laser pulses and measure return times to build 2D or 3D maps of the environment. They are essential for SLAM (Simultaneous Localization and Mapping) and navigation.
+
+### 2D LiDAR (Planar Scanner)
+
+```xml
+<!-- 2D LiDAR for navigation (similar to SICK TiM or Hokuyo) -->
+<sensor name="lidar_2d" type="gpu_lidar">
+  <pose>0 0 0.3 0 0 0</pose>  <!-- Mounted on torso -->
+  <always_on>true</always_on>
+  <update_rate>10</update_rate>  <!-- 10 Hz scan rate -->
+  <visualize>true</visualize>
+  
+  <lidar>
+    <scan>
+      <horizontal>
+        <samples>720</samples>        <!-- Angular resolution -->
+        <resolution>1</resolution>
+        <min_angle>-2.356</min_angle>  <!-- -135 degrees -->
+        <max_angle>2.356</max_angle>   <!-- +135 degrees -->
+      </horizontal>
+      <vertical>
+        <samples>1</samples>           <!-- Single scan plane -->
+        <resolution>1</resolution>
+        <min_angle>0</min_angle>
+        <max_angle>0</max_angle>
+      </vertical>
+    </scan>
+    <range>
+      <min>0.08</min>   <!-- 8cm minimum range -->
+      <max>25.0</max>   <!-- 25m maximum range -->
+      <resolution>0.01</resolution>  <!-- 1cm resolution -->
+    </range>
+    <noise>
+      <type>gaussian</type>
+      <mean>0.0</mean>
+      <stddev>0.01</stddev>  <!-- 1cm noise -->
+    </noise>
+  </lidar>
+</sensor>
+```
+
+### 3D LiDAR (Velodyne-style)
+
+```xml
+<!-- 3D LiDAR for full environmental mapping -->
+<sensor name="lidar_3d" type="gpu_lidar">
+  <pose>0 0 0.8 0 0 0</pose>  <!-- Mounted on top of head -->
+  <always_on>true</always_on>
+  <update_rate>10</update_rate>
+  <visualize>true</visualize>
+  
+  <lidar>
+    <scan>
+      <horizontal>
+        <samples>1800</samples>        <!-- 0.2 degree resolution -->
+        <resolution>1</resolution>
+        <min_angle>-3.14159</min_angle> <!-- Full 360 degrees -->
+        <max_angle>3.14159</max_angle>
+      </horizontal>
+      <vertical>
+        <samples>16</samples>           <!-- 16 scan lines -->
+        <resolution>1</resolution>
+        <min_angle>-0.2618</min_angle>  <!-- -15 degrees -->
+        <max_angle>0.2618</max_angle>   <!-- +15 degrees -->
+      </vertical>
+    </scan>
+    <range>
+      <min>0.5</min>
+      <max>100.0</max>
+      <resolution>0.003</resolution>  <!-- 3mm resolution -->
+    </range>
+    <noise>
+      <type>gaussian</type>
+      <mean>0.0</mean>
+      <stddev>0.02</stddev>  <!-- 2cm noise -->
+    </noise>
+  </lidar>
+</sensor>
+```
+
+### Processing LiDAR Data in ROS 2
+
+```python
+import rclpy
+from rclpy.node import Node
+from sensor_msgs.msg import LaserScan, PointCloud2
+import numpy as np
+import math
+
+class LiDARProcessor(Node):
+    """Process 2D LiDAR scans for navigation and obstacle avoidance."""
+    
+    def __init__(self):
+        super().__init__('lidar_processor')
+        
+        self.scan_sub = self.create_subscription(
+            LaserScan,
+            '/humanoid/lidar_2d/scan',
+            self.scan_callback,
+            10
+        )
+        
+        # Safety parameters
+        self.obstacle_threshold = 0.5  # meters
+        self.warning_threshold = 1.0   # meters
+        
+    def scan_callback(self, msg):
+        """Process a 2D laser scan."""
+        ranges = np.array(msg.ranges)
+        angles = np.linspace(
+            msg.angle_min, msg.angle_max, len(ranges)
+        )
+        
+        # Filter out invalid readings
+        valid_mask = (ranges > msg.range_min) & (ranges < msg.range_max)
+        valid_ranges = ranges[valid_mask]
+        valid_angles = angles[valid_mask]
+        
+        # Convert to Cartesian coordinates
+        x = valid_ranges * np.cos(valid_angles)
+        y = valid_ranges * np.sin(valid_angles)
+        
+        # Find closest obstacle
+        if len(valid_ranges) > 0:
+            min_idx = np.argmin(valid_ranges)
+            min_range = valid_ranges[min_idx]
+            min_angle = math.degrees(valid_angles[min_idx])
+            
+            self.get_logger().info(
+                f'Closest obstacle: {min_range:.2f}m at {min_angle:.1f} deg'
+            )
+            
+            # Check safety zones
+            if min_range < self.obstacle_threshold:
+                self.get_logger().error(
+                    f'DANGER: Obstacle at {min_range:.2f}m! Stop immediately!'
+                )
+            elif min_range < self.warning_threshold:
+                self.get_logger().warn(
+                    f'WARNING: Obstacle approaching at {min_range:.2f}m'
+                )
+        
+        # Sector analysis: divide scan into regions
+        sectors = self.analyze_sectors(valid_ranges, valid_angles)
+        self.get_logger().info(f'Sector distances: {sectors}')
+    
+    def analyze_sectors(self, ranges, angles, num_sectors=8):
+        """Divide the scan into angular sectors and find min distance in each."""
+        sector_size = (angles[-1] - angles[0]) / num_sectors
+        sectors = {}
+        sector_names = ['right', 'front-right', 'front-right2',
+                        'front', 'front-left', 'front-left2',
+                        'left', 'behind']
+        
+        for i in range(min(num_sectors, len(sector_names))):
+            sector_start = angles[0] + i * sector_size
+            sector_end = sector_start + sector_size
+            
+            mask = (angles >= sector_start) & (angles < sector_end)
+            sector_ranges = ranges[mask]
+            
+            if len(sector_ranges) > 0:
+                sectors[sector_names[i]] = round(float(np.min(sector_ranges)), 2)
+            else:
+                sectors[sector_names[i]] = float('inf')
+        
+        return sectors
+
+def main():
+    rclpy.init()
+    node = LiDARProcessor()
+    rclpy.spin(node)
+    rclpy.shutdown()
+```
+
+## IMU (Inertial Measurement Unit)
+
+The IMU is critical for humanoid balance. It provides orientation, angular velocity, and linear acceleration data at high rates.
+
+### Adding an IMU Sensor
+
+```xml
+<!-- IMU sensor mounted in the humanoid torso -->
+<sensor name="imu_sensor" type="imu">
+  <pose>0 0 0 0 0 0</pose>  <!-- At the center of the torso link -->
+  <always_on>true</always_on>
+  <update_rate>200</update_rate>  <!-- 200 Hz for balance control -->
+  <visualize>false</visualize>
+  
+  <imu>
+    <angular_velocity>
+      <x>
+        <noise type="gaussian">
+          <mean>0.0</mean>
+          <stddev>0.0002</stddev>  <!-- rad/s noise -->
+          <bias_mean>0.00075</bias_mean>
+          <bias_stddev>0.000008</bias_stddev>
+        </noise>
+      </x>
+      <y>
+        <noise type="gaussian">
+          <mean>0.0</mean>
+          <stddev>0.0002</stddev>
+          <bias_mean>0.00075</bias_mean>
+          <bias_stddev>0.000008</bias_stddev>
+        </noise>
+      </y>
+      <z>
+        <noise type="gaussian">
+          <mean>0.0</mean>
+          <stddev>0.0002</stddev>
+          <bias_mean>0.00075</bias_mean>
+          <bias_stddev>0.000008</bias_stddev>
+        </noise>
+      </z>
+    </angular_velocity>
+    <linear_acceleration>
+      <x>
+        <noise type="gaussian">
+          <mean>0.0</mean>
+          <stddev>0.017</stddev>  <!-- m/s^2 noise -->
+          <bias_mean>0.1</bias_mean>
+          <bias_stddev>0.001</bias_stddev>
+        </noise>
+      </x>
+      <y>
+        <noise type="gaussian">
+          <mean>0.0</mean>
+          <stddev>0.017</stddev>
+          <bias_mean>0.1</bias_mean>
+          <bias_stddev>0.001</bias_stddev>
+        </noise>
+      </y>
+      <z>
+        <noise type="gaussian">
+          <mean>0.0</mean>
+          <stddev>0.017</stddev>
+          <bias_mean>0.1</bias_mean>
+          <bias_stddev>0.001</bias_stddev>
+        </noise>
+      </z>
+    </linear_acceleration>
+  </imu>
+</sensor>
+```
+
+### IMU Noise Parameters Explained
+
+| Parameter | Meaning | Typical Value |
+|-----------|---------|---------------|
+| **stddev** (gyro) | Random noise on angular velocity | 0.0001 - 0.001 rad/s |
+| **bias_mean** (gyro) | Constant offset in readings | 0.0005 - 0.001 rad/s |
+| **bias_stddev** (gyro) | Drift in the bias over time | 0.000001 - 0.00001 rad/s |
+| **stddev** (accel) | Random noise on acceleration | 0.01 - 0.05 m/s^2 |
+| **bias_mean** (accel) | Constant offset in readings | 0.05 - 0.2 m/s^2 |
+| **bias_stddev** (accel) | Drift in the bias over time | 0.0005 - 0.005 m/s^2 |
+
+### Processing IMU Data for Balance
+
+```python
+import rclpy
+from rclpy.node import Node
+from sensor_msgs.msg import Imu
+import numpy as np
+import math
+
+class IMUBalanceMonitor(Node):
+    """Monitor IMU data for humanoid balance assessment."""
+    
+    def __init__(self):
+        super().__init__('imu_balance_monitor')
+        
+        self.imu_sub = self.create_subscription(
+            Imu,
+            '/humanoid/imu_sensor/imu',
+            self.imu_callback,
+            10
+        )
+        
+        # Balance thresholds
+        self.tilt_warning = 10.0    # degrees
+        self.tilt_critical = 25.0   # degrees
+        
+        # Complementary filter state
+        self.pitch = 0.0
+        self.roll = 0.0
+        self.alpha = 0.98  # Gyro trust factor
+        self.last_time = None
+        
+    def imu_callback(self, msg):
+        """Process IMU data and estimate body tilt."""
+        current_time = self.get_clock().now()
+        
+        # Extract quaternion orientation
+        q = msg.orientation
+        
+        # Convert quaternion to Euler angles
+        roll, pitch, yaw = self.quaternion_to_euler(
+            q.x, q.y, q.z, q.w
+        )
+        
+        roll_deg = math.degrees(roll)
+        pitch_deg = math.degrees(pitch)
+        
+        # Extract angular velocities
+        gyro_x = msg.angular_velocity.x
+        gyro_y = msg.angular_velocity.y
+        gyro_z = msg.angular_velocity.z
+        
+        # Extract linear accelerations
+        accel_x = msg.linear_acceleration.x
+        accel_y = msg.linear_acceleration.y
+        accel_z = msg.linear_acceleration.z
+        
+        # Compute tilt from accelerometer (gravity reference)
+        accel_roll = math.atan2(accel_y, accel_z)
+        accel_pitch = math.atan2(
+            -accel_x, 
+            math.sqrt(accel_y**2 + accel_z**2)
+        )
+        
+        # Complementary filter for stable tilt estimate
+        if self.last_time is not None:
+            dt = (current_time - self.last_time).nanoseconds / 1e9
+            
+            self.roll = self.alpha * (self.roll + gyro_x * dt) + \
+                        (1 - self.alpha) * math.degrees(accel_roll)
+            self.pitch = self.alpha * (self.pitch + gyro_y * dt) + \
+                         (1 - self.alpha) * math.degrees(accel_pitch)
+        else:
+            self.roll = math.degrees(accel_roll)
+            self.pitch = math.degrees(accel_pitch)
+        
+        self.last_time = current_time
+        
+        # Assess balance
+        total_tilt = math.sqrt(self.roll**2 + self.pitch**2)
+        
+        if total_tilt > self.tilt_critical:
+            self.get_logger().error(
+                f'CRITICAL TILT: {total_tilt:.1f} deg '
+                f'(roll={self.roll:.1f}, pitch={self.pitch:.1f}). '
+                f'Robot may fall!'
+            )
+        elif total_tilt > self.tilt_warning:
+            self.get_logger().warn(
+                f'Tilt warning: {total_tilt:.1f} deg '
+                f'(roll={self.roll:.1f}, pitch={self.pitch:.1f})'
+            )
+        else:
+            self.get_logger().info(
+                f'Balance OK: tilt={total_tilt:.1f} deg'
+            )
+    
+    @staticmethod
+    def quaternion_to_euler(x, y, z, w):
+        """Convert quaternion to Euler angles (roll, pitch, yaw)."""
+        # Roll (x-axis rotation)
+        sinr_cosp = 2.0 * (w * x + y * z)
+        cosr_cosp = 1.0 - 2.0 * (x * x + y * y)
+        roll = math.atan2(sinr_cosp, cosr_cosp)
+        
+        # Pitch (y-axis rotation)
+        sinp = 2.0 * (w * y - z * x)
+        if abs(sinp) >= 1:
+            pitch = math.copysign(math.pi / 2, sinp)
+        else:
+            pitch = math.asin(sinp)
+        
+        # Yaw (z-axis rotation)
+        siny_cosp = 2.0 * (w * z + x * y)
+        cosy_cosp = 1.0 - 2.0 * (y * y + z * z)
+        yaw = math.atan2(siny_cosp, cosy_cosp)
+        
+        return roll, pitch, yaw
+
+def main():
+    rclpy.init()
+    node = IMUBalanceMonitor()
+    rclpy.spin(node)
+    rclpy.shutdown()
+```
+
+## Force/Torque Sensors
+
+Force/torque (F/T) sensors measure the forces and torques at a joint or contact point. They are essential for compliant manipulation and detecting ground contact during locomotion.
+
+### Adding F/T Sensors to Ankles
+
+```xml
+<!-- Force/torque sensor at the ankle for ground reaction force measurement -->
+<joint name="left_ankle" type="revolute">
+  <parent>left_lower_leg</parent>
+  <child>left_foot</child>
+  <axis>
+    <xyz>0 1 0</xyz>
+    <limit>
+      <lower>-0.52</lower>
+      <upper>0.52</upper>
+    </limit>
+  </axis>
+  
+  <sensor name="left_ankle_ft" type="force_torque">
+    <always_on>true</always_on>
+    <update_rate>200</update_rate>  <!-- Match IMU rate -->
+    <visualize>true</visualize>
+    
+    <force_torque>
+      <frame>child</frame>             <!-- Measure in child link frame -->
+      <measure_direction>child_to_parent</measure_direction>
+      <force>
+        <x>
+          <noise type="gaussian">
+            <mean>0</mean>
+            <stddev>0.1</stddev>  <!-- 0.1N noise -->
+          </noise>
+        </x>
+        <y>
+          <noise type="gaussian">
+            <mean>0</mean>
+            <stddev>0.1</stddev>
+          </noise>
+        </y>
+        <z>
+          <noise type="gaussian">
+            <mean>0</mean>
+            <stddev>0.1</stddev>
+          </noise>
+        </z>
+      </force>
+      <torque>
+        <x>
+          <noise type="gaussian">
+            <mean>0</mean>
+            <stddev>0.01</stddev>  <!-- 0.01 N*m noise -->
+          </noise>
+        </x>
+        <y>
+          <noise type="gaussian">
+            <mean>0</mean>
+            <stddev>0.01</stddev>
+          </noise>
+        </y>
+        <z>
+          <noise type="gaussian">
+            <mean>0</mean>
+            <stddev>0.01</stddev>
+          </noise>
+        </z>
+      </torque>
+    </force_torque>
+  </sensor>
+</joint>
+```
+
+### Processing Force/Torque Data
+
+```python
+import rclpy
+from rclpy.node import Node
+from geometry_msgs.msg import WrenchStamped
+import numpy as np
+
+class FootContactDetector(Node):
+    """Detect ground contact and estimate center of pressure from F/T sensors."""
+    
+    def __init__(self):
+        super().__init__('foot_contact_detector')
+        
+        self.left_ft_sub = self.create_subscription(
+            WrenchStamped,
+            '/humanoid/left_ankle_ft/wrench',
+            lambda msg: self.ft_callback(msg, 'left'),
+            10
+        )
+        self.right_ft_sub = self.create_subscription(
+            WrenchStamped,
+            '/humanoid/right_ankle_ft/wrench',
+            lambda msg: self.ft_callback(msg, 'right'),
+            10
+        )
+        
+        self.contact_threshold = 10.0  # Newtons
+        self.robot_mass = 50.0         # kg
+        self.gravity = 9.81
+        
+        self.left_contact = False
+        self.right_contact = False
+        self.left_force_z = 0.0
+        self.right_force_z = 0.0
+    
+    def ft_callback(self, msg, side):
+        """Process force/torque reading from an ankle sensor."""
+        force = msg.wrench.force
+        torque = msg.wrench.torque
+        
+        # Vertical force (z-axis) indicates ground contact
+        fz = abs(force.z)
+        
+        # Detect contact state
+        in_contact = fz > self.contact_threshold
+        
+        if side == 'left':
+            self.left_contact = in_contact
+            self.left_force_z = fz
+        else:
+            self.right_contact = in_contact
+            self.right_force_z = fz
+        
+        # Determine gait phase
+        phase = self.determine_gait_phase()
+        
+        # Compute center of pressure if foot is in contact
+        if in_contact and fz > 0:
+            cop_x = -torque.y / fz  # Center of pressure x
+            cop_y = torque.x / fz   # Center of pressure y
+            self.get_logger().info(
+                f'{side} foot: Fz={fz:.1f}N, '
+                f'CoP=({cop_x:.3f}, {cop_y:.3f})m, '
+                f'Phase: {phase}'
+            )
+    
+    def determine_gait_phase(self):
+        """Determine current gait phase from contact states."""
+        if self.left_contact and self.right_contact:
+            return 'double_support'
+        elif self.left_contact:
+            return 'left_single_support'
+        elif self.right_contact:
+            return 'right_single_support'
+        else:
+            return 'flight'  # Both feet off ground (jumping/falling)
+
+def main():
+    rclpy.init()
+    node = FootContactDetector()
+    rclpy.spin(node)
+    rclpy.shutdown()
+```
+
+## Bridging Gazebo to ROS 2
+
+The `ros_gz_bridge` package translates Gazebo transport messages into ROS 2 messages and vice versa. You must configure it to expose the sensors you need.
+
+### Bridge Configuration
+
+```bash
+# Bridge individual topics
+ros2 run ros_gz_bridge parameter_bridge \
+  /humanoid/head_camera/image@sensor_msgs/msg/Image@gz.msgs.Image \
+  /humanoid/depth_camera/depth_image@sensor_msgs/msg/Image@gz.msgs.Image \
+  /humanoid/lidar_2d/scan@sensor_msgs/msg/LaserScan@gz.msgs.LaserScan \
+  /humanoid/imu_sensor/imu@sensor_msgs/msg/Imu@gz.msgs.IMU \
+  /humanoid/left_ankle_ft/wrench@geometry_msgs/msg/WrenchStamped@gz.msgs.Wrench
+```
+
+### Bridge via Launch File
+
+```python
+# humanoid_sensors.launch.py
+from launch import LaunchDescription
+from launch_ros.actions import Node
+
+def generate_launch_description():
+    # Bridge all sensor topics from Gazebo to ROS 2
+    bridge = Node(
+        package='ros_gz_bridge',
+        executable='parameter_bridge',
+        arguments=[
+            # Camera
+            '/humanoid/head_camera/image@sensor_msgs/msg/Image@gz.msgs.Image',
+            '/humanoid/head_camera/camera_info@sensor_msgs/msg/CameraInfo@gz.msgs.CameraInfo',
+            # Depth camera
+            '/humanoid/depth_camera/depth_image@sensor_msgs/msg/Image@gz.msgs.Image',
+            '/humanoid/depth_camera/points@sensor_msgs/msg/PointCloud2@gz.msgs.PointCloudPacked',
+            # LiDAR
+            '/humanoid/lidar_2d/scan@sensor_msgs/msg/LaserScan@gz.msgs.LaserScan',
+            # IMU
+            '/humanoid/imu_sensor/imu@sensor_msgs/msg/Imu@gz.msgs.IMU',
+            # Force/Torque
+            '/humanoid/left_ankle_ft/wrench@geometry_msgs/msg/WrenchStamped@gz.msgs.Wrench',
+            '/humanoid/right_ankle_ft/wrench@geometry_msgs/msg/WrenchStamped@gz.msgs.Wrench',
+            # Clock (important for sim time)
+            '/clock@rosgraph_msgs/msg/Clock@gz.msgs.Clock',
+        ],
+        output='screen'
+    )
+    
+    return LaunchDescription([bridge])
+```
+
+### Verifying Sensor Data
+
+```bash
+# List all available Gazebo topics
+gz topic -l
+
+# Echo a specific Gazebo topic
+gz topic -e -t /humanoid/imu_sensor/imu
+
+# After bridging, verify ROS 2 topics
+ros2 topic list
+ros2 topic hz /humanoid/head_camera/image
+ros2 topic echo /humanoid/imu_sensor/imu --once
+
+# Visualize camera feed
+ros2 run rqt_image_view rqt_image_view /humanoid/head_camera/image
+
+# Visualize LiDAR in RViz
+ros2 run rviz2 rviz2
+# Add LaserScan display, set topic to /humanoid/lidar_2d/scan
+```
+
+## Sensor Performance and Fidelity Trade-offs
+
+Simulating sensors accurately is computationally expensive. Understanding the trade-offs helps you configure your simulation appropriately.
+
+| Factor | High Fidelity | Low Fidelity |
+|--------|--------------|--------------|
+| **Camera resolution** | 1920x1080 | 320x240 |
+| **Camera update rate** | 60 Hz | 10 Hz |
+| **LiDAR samples** | 1800 horizontal | 360 horizontal |
+| **Noise models** | Per-axis bias + drift | Simple Gaussian |
+| **Rendering** | Ray-tracing, PBR | Basic rasterization |
+| **Sim speed** | 0.1-0.5x real-time | 5-10x real-time |
+
+**Recommendation**: Start with lower fidelity for algorithm development and increase fidelity for final validation before real-world deployment.
+
+## Summary
+
+Key takeaways from this chapter:
+
+1. Gazebo simulates cameras, LiDAR, IMU, depth sensors, and F/T sensors through a plugin architecture.
+2. **Noise models** are essential for realistic simulation -- always configure them to match your real sensors.
+3. The **ros_gz_bridge** connects Gazebo sensor data to ROS 2 topics, making simulated and real sensors interchangeable from your code's perspective.
+4. **IMU** data is critical for balance and requires complementary filtering to handle drift.
+5. **Force/torque** sensors at the ankles enable gait phase detection and center of pressure estimation.
+6. Sensor fidelity trades off against simulation speed -- tune based on your development stage.
+
+## Exercises
+
+1. **Camera Pipeline**: Add an RGB camera and a depth camera to a humanoid head model. Write a ROS 2 node that subscribes to both streams and creates a colored point cloud by combining them.
+
+2. **LiDAR Mapping**: Configure a 2D LiDAR on a simulated humanoid. Use the `slam_toolbox` ROS 2 package to build a map of a simulated room while the robot is teleoperated.
+
+3. **IMU Calibration**: Add an IMU sensor with and without noise. Record 60 seconds of data while the robot stands still, then compute the Allan Variance to characterize the noise. Compare with the configured noise parameters.
+
+4. **Sensor Fusion**: Implement a simple Extended Kalman Filter (EKF) that fuses IMU data with simulated GPS position to estimate the robot's position. Use the `robot_localization` ROS 2 package or implement your own.
+
+5. **Contact Detection**: Using the force/torque sensors at both ankles, write a node that classifies the robot's gait into phases: double support, left single support, right single support, and flight. Visualize the transitions over time.
+
+## Next Steps
+
+Continue to [Unity Integration](./unity-integration) to learn how to use Unity for advanced visualization, digital twin creation, and hybrid simulation workflows.

@@ -1,0 +1,637 @@
+---
+sidebar_position: 4
+title: "Manipulation and Grasping"
+description: "Grasp planning algorithms, force control, end-effector design, pick-and-place pipelines with MoveIt 2, and tactile sensing for humanoid robots"
+---
+
+# Manipulation and Grasping
+
+While locomotion gets a humanoid robot to the right place, **manipulation** is what lets it interact with the world. Grasping objects, opening doors, and using tools require sophisticated planning, force control, and sensing. This chapter covers the theory and practice of humanoid manipulation, from grasp planning through tactile feedback.
+
+## Learning Objectives
+
+By the end of this chapter, you will be able to:
+
+1. **Classify** grasp types and select appropriate strategies for different objects
+2. **Implement** analytical and sampling-based grasp planners
+3. **Configure** MoveIt 2 for humanoid arm motion planning
+4. **Design** force-controlled manipulation strategies
+5. **Integrate** tactile sensing for grasp stability detection
+6. **Build** a complete pick-and-place pipeline in ROS 2
+
+---
+
+## Grasp Taxonomy
+
+Humans use a rich repertoire of grasps. Robotics research has categorized these into a taxonomy that guides end-effector design and grasp planning.
+
+```
+                        Grasp Types
+                            │
+              ┌─────────────┴─────────────┐
+              │                           │
+         Power Grasps                Precision Grasps
+         (stability)                 (dexterity)
+              │                           │
+    ┌─────┬───┴───┬──────┐      ┌────┬────┴────┬─────┐
+    │     │       │      │      │    │         │     │
+  Cylin- Spher- Palmar  Hook  Tip  Lateral  Tripod  Pinch
+  drical ical                       (key)
+```
+
+| Grasp Type | Contact Points | Force | Use Case | Robot Example |
+|-----------|----------------|-------|----------|---------------|
+| **Cylindrical** | Full hand wrap | High | Bottles, tools, handles | 5-finger hand |
+| **Spherical** | Fingertips + palm | High | Balls, round objects | 3+ finger gripper |
+| **Pinch** | 2 fingertips | Low | Small objects, screws | Parallel gripper |
+| **Lateral (key)** | Thumb + side of index | Medium | Cards, thin objects | Anthropomorphic hand |
+| **Tripod** | 3 fingertips | Medium | Pens, precision work | 3-finger adaptive |
+| **Hook** | Curled fingers, no thumb | Moderate | Bags, handles | Under-actuated hand |
+
+---
+
+## Grasp Planning Algorithms
+
+### Force Closure Analysis
+
+A grasp achieves **force closure** when the contact forces can resist any external wrench (force + torque) applied to the object. This is the fundamental mathematical criterion for a stable grasp.
+
+```python
+import numpy as np
+from scipy.spatial import ConvexHull
+
+class ForceClosureAnalyzer:
+    """Analyze whether a set of contacts achieves force closure."""
+
+    def __init__(self, friction_coefficient=0.5):
+        self.mu = friction_coefficient
+
+    def compute_grasp_wrench_space(self, contacts, normals):
+        """Compute the Grasp Wrench Space (GWS) from contact points.
+
+        Each contact with Coulomb friction generates a friction cone
+        of possible wrenches. The GWS is the convex hull of all
+        primitive wrenches from all contacts.
+
+        Parameters
+        ----------
+        contacts : np.ndarray, shape (n_contacts, 3)
+            Contact point positions on the object surface.
+        normals : np.ndarray, shape (n_contacts, 3)
+            Inward-pointing surface normals at each contact.
+
+        Returns
+        -------
+        wrenches : np.ndarray, shape (m, 6)
+            Primitive wrenches [force_x, force_y, force_z, torque_x, torque_y, torque_z].
+        """
+        n_cone_edges = 8  # Discretize friction cone into 8 edges
+        wrenches = []
+
+        for contact, normal in zip(contacts, normals):
+            # Build local frame at contact
+            normal = normal / np.linalg.norm(normal)
+            tangent1 = np.cross(normal, [0, 0, 1])
+            if np.linalg.norm(tangent1) < 1e-6:
+                tangent1 = np.cross(normal, [0, 1, 0])
+            tangent1 /= np.linalg.norm(tangent1)
+            tangent2 = np.cross(normal, tangent1)
+
+            # Generate friction cone edges
+            for i in range(n_cone_edges):
+                angle = 2 * np.pi * i / n_cone_edges
+                force = (normal
+                         + self.mu * np.cos(angle) * tangent1
+                         + self.mu * np.sin(angle) * tangent2)
+                force /= np.linalg.norm(force)
+
+                # Wrench = [force, torque], where torque = contact x force
+                torque = np.cross(contact, force)
+                wrenches.append(np.concatenate([force, torque]))
+
+        return np.array(wrenches)
+
+    def check_force_closure(self, contacts, normals):
+        """Check if the grasp achieves force closure.
+
+        Force closure holds if and only if the origin of wrench space
+        lies strictly inside the convex hull of the GWS.
+        """
+        wrenches = self.compute_grasp_wrench_space(contacts, normals)
+
+        try:
+            hull = ConvexHull(wrenches)
+            # Check if origin is inside the hull
+            # Using the property that all half-plane equations
+            # should be satisfied (negative values = inside)
+            origin = np.zeros(6)
+            inside = all(
+                np.dot(eq[:-1], origin) + eq[-1] <= 0
+                for eq in hull.equations
+            )
+            return inside
+        except Exception:
+            return False
+
+    def compute_quality_metric(self, contacts, normals):
+        """Compute the epsilon quality metric (largest inscribed ball in GWS).
+
+        Higher epsilon = more robust grasp that can resist larger disturbances.
+        """
+        wrenches = self.compute_grasp_wrench_space(contacts, normals)
+
+        try:
+            hull = ConvexHull(wrenches)
+            # Distance from origin to each face of the hull
+            distances = []
+            for eq in hull.equations:
+                dist = abs(np.dot(eq[:-1], np.zeros(6)) + eq[-1])
+                dist /= np.linalg.norm(eq[:-1])
+                distances.append(dist)
+            epsilon = min(distances)
+            return epsilon
+        except Exception:
+            return 0.0
+
+
+# Example: two-finger parallel grasp on a cylinder
+analyzer = ForceClosureAnalyzer(friction_coefficient=0.6)
+
+contacts = np.array([
+    [0.03, 0.0, 0.05],   # Right finger contact
+    [-0.03, 0.0, 0.05],  # Left finger contact
+])
+normals = np.array([
+    [-1.0, 0.0, 0.0],    # Points inward (left)
+    [1.0, 0.0, 0.0],     # Points inward (right)
+])
+
+is_stable = analyzer.check_force_closure(contacts, normals)
+quality = analyzer.compute_quality_metric(contacts, normals)
+print(f"Force closure: {is_stable}")
+print(f"Grasp quality (epsilon): {quality:.4f}")
+```
+
+### Sampling-Based Grasp Planning
+
+```python
+import numpy as np
+
+class GraspSampler:
+    """Generate and rank grasp candidates by sampling approach poses."""
+
+    def __init__(self, gripper_width=0.08, gripper_depth=0.05):
+        self.gripper_width = gripper_width
+        self.gripper_depth = gripper_depth
+        self.analyzer = ForceClosureAnalyzer(friction_coefficient=0.5)
+
+    def sample_grasps(self, object_center, object_dims, num_samples=500):
+        """Sample grasp candidates around an object.
+
+        Generates approach poses from the upper hemisphere and
+        filters for kinematic feasibility and force closure.
+        """
+        candidates = []
+
+        for _ in range(num_samples):
+            # Random approach direction (upper hemisphere)
+            theta = np.random.uniform(0, 2 * np.pi)
+            phi = np.random.uniform(0, np.pi / 2.5)
+
+            approach = np.array([
+                np.sin(phi) * np.cos(theta),
+                np.sin(phi) * np.sin(theta),
+                -np.cos(phi),
+            ])
+
+            # Standoff distance
+            standoff = np.random.uniform(0.03, 0.08)
+            position = object_center - approach * standoff
+
+            # Finger roll around approach axis
+            roll = np.random.uniform(0, np.pi)
+
+            # Check if gripper width accommodates the object
+            # (simplified: project object dims onto grip axis)
+            grip_axis = self._get_grip_axis(approach, roll)
+            projected_width = abs(np.dot(grip_axis, object_dims))
+
+            if projected_width > self.gripper_width:
+                continue  # Object too wide for this grasp
+
+            # Estimate contact points for quality evaluation
+            contacts = np.array([
+                object_center + grip_axis * projected_width / 2,
+                object_center - grip_axis * projected_width / 2,
+            ])
+            normals = np.array([-grip_axis, grip_axis])
+
+            quality = self.analyzer.compute_quality_metric(contacts, normals)
+
+            candidates.append({
+                "position": position,
+                "approach": approach,
+                "roll": roll,
+                "quality": quality,
+                "projected_width": projected_width,
+            })
+
+        # Sort by quality (highest first)
+        candidates.sort(key=lambda g: g["quality"], reverse=True)
+        return candidates
+
+    def _get_grip_axis(self, approach, roll):
+        """Compute the gripper opening axis from approach direction and roll."""
+        z = -approach / np.linalg.norm(approach)
+        x = np.cross([0, 0, 1], z)
+        if np.linalg.norm(x) < 1e-6:
+            x = np.cross([0, 1, 0], z)
+        x /= np.linalg.norm(x)
+
+        # Apply roll rotation around approach axis
+        cos_r, sin_r = np.cos(roll), np.sin(roll)
+        y = np.cross(z, x)
+        grip_axis = cos_r * x + sin_r * y
+        return grip_axis
+
+
+# Generate grasps for a box
+sampler = GraspSampler(gripper_width=0.08)
+grasps = sampler.sample_grasps(
+    object_center=np.array([0.5, 0.0, 0.45]),
+    object_dims=np.array([0.05, 0.05, 0.10]),
+    num_samples=1000
+)
+
+print(f"Generated {len(grasps)} feasible grasps")
+if grasps:
+    print(f"Best grasp quality: {grasps[0]['quality']:.4f}")
+    print(f"Best grasp position: {grasps[0]['position']}")
+```
+
+---
+
+## MoveIt 2 Integration
+
+MoveIt 2 is the standard motion planning framework for ROS 2. It handles inverse kinematics, collision-aware path planning, and trajectory execution.
+
+### Configuring MoveIt 2 for a Humanoid Arm
+
+```python
+import rclpy
+from rclpy.node import Node
+from moveit_msgs.msg import MoveItErrorCodes
+from geometry_msgs.msg import Pose, PoseStamped
+from moveit.planning import MoveItPy
+
+class HumanoidArmPlanner(Node):
+    """Plan and execute arm motions using MoveIt 2."""
+
+    def __init__(self):
+        super().__init__('humanoid_arm_planner')
+
+        # Initialize MoveIt Python interface
+        self.moveit = MoveItPy(node_name="humanoid_moveit")
+        self.arm = self.moveit.get_planning_component("right_arm")
+        self.gripper = self.moveit.get_planning_component("right_gripper")
+
+        self.get_logger().info("MoveIt 2 arm planner initialized")
+
+    def plan_to_pose(self, target_pose):
+        """Plan a collision-free path to a target end-effector pose.
+
+        Parameters
+        ----------
+        target_pose : Pose
+            Target position and orientation for the end-effector.
+
+        Returns
+        -------
+        trajectory : RobotTrajectory or None
+            The planned path, or None if planning fails.
+        """
+        # Set the target
+        pose_stamped = PoseStamped()
+        pose_stamped.header.frame_id = "base_link"
+        pose_stamped.pose = target_pose
+        self.arm.set_goal_state(pose_stamped_msg=pose_stamped)
+
+        # Plan with OMPL
+        plan_result = self.arm.plan()
+
+        if plan_result.error_code.val == MoveItErrorCodes.SUCCESS:
+            self.get_logger().info("Motion plan succeeded")
+            return plan_result.trajectory
+        else:
+            self.get_logger().error(
+                f"Motion plan failed with code: {plan_result.error_code.val}"
+            )
+            return None
+
+    def execute_trajectory(self, trajectory):
+        """Execute a planned trajectory on the robot."""
+        self.moveit.execute(trajectory, controllers=[])
+
+    def open_gripper(self):
+        """Open the gripper to the fully open position."""
+        self.gripper.set_goal_state(configuration_name="open")
+        plan = self.gripper.plan()
+        if plan.error_code.val == MoveItErrorCodes.SUCCESS:
+            self.moveit.execute(plan.trajectory, controllers=[])
+
+    def close_gripper(self):
+        """Close the gripper for grasping."""
+        self.gripper.set_goal_state(configuration_name="closed")
+        plan = self.gripper.plan()
+        if plan.error_code.val == MoveItErrorCodes.SUCCESS:
+            self.moveit.execute(plan.trajectory, controllers=[])
+
+
+def main():
+    rclpy.init()
+    planner = HumanoidArmPlanner()
+
+    # Define a grasp pose
+    grasp_pose = Pose()
+    grasp_pose.position.x = 0.5
+    grasp_pose.position.y = 0.0
+    grasp_pose.position.z = 0.45
+    grasp_pose.orientation.x = 0.0
+    grasp_pose.orientation.y = 0.707
+    grasp_pose.orientation.z = 0.0
+    grasp_pose.orientation.w = 0.707  # Point gripper downward
+
+    trajectory = planner.plan_to_pose(grasp_pose)
+    if trajectory:
+        planner.execute_trajectory(trajectory)
+
+    rclpy.shutdown()
+```
+
+### Pick-and-Place Pipeline
+
+```python
+import rclpy
+from rclpy.node import Node
+from geometry_msgs.msg import Pose, PoseStamped
+import time
+
+class PickAndPlacePipeline(Node):
+    """Complete pick-and-place pipeline for humanoid manipulation."""
+
+    def __init__(self, arm_planner):
+        super().__init__('pick_and_place')
+        self.planner = arm_planner
+        self.pre_grasp_offset = 0.10  # 10cm above grasp point
+
+    def execute_pick_and_place(self, object_pose, place_pose):
+        """Execute a full pick-and-place sequence.
+
+        Steps:
+        1. Move to pre-grasp position (above object)
+        2. Open gripper
+        3. Descend to grasp position
+        4. Close gripper
+        5. Lift object
+        6. Move to pre-place position
+        7. Descend to place position
+        8. Open gripper
+        9. Retreat upward
+        """
+        self.get_logger().info("Starting pick-and-place sequence")
+
+        # Step 1: Pre-grasp (approach from above)
+        pre_grasp = self._offset_pose(object_pose, z_offset=self.pre_grasp_offset)
+        self.get_logger().info("Moving to pre-grasp position")
+        traj = self.planner.plan_to_pose(pre_grasp)
+        if not traj:
+            self.get_logger().error("Failed to plan to pre-grasp")
+            return False
+        self.planner.execute_trajectory(traj)
+
+        # Step 2: Open gripper
+        self.get_logger().info("Opening gripper")
+        self.planner.open_gripper()
+        time.sleep(0.5)
+
+        # Step 3: Descend to grasp
+        self.get_logger().info("Descending to grasp")
+        traj = self.planner.plan_to_pose(object_pose)
+        if not traj:
+            return False
+        self.planner.execute_trajectory(traj)
+
+        # Step 4: Close gripper
+        self.get_logger().info("Closing gripper")
+        self.planner.close_gripper()
+        time.sleep(0.5)
+
+        # Step 5: Lift
+        lift_pose = self._offset_pose(object_pose, z_offset=self.pre_grasp_offset)
+        self.get_logger().info("Lifting object")
+        traj = self.planner.plan_to_pose(lift_pose)
+        if not traj:
+            return False
+        self.planner.execute_trajectory(traj)
+
+        # Step 6: Move to pre-place
+        pre_place = self._offset_pose(place_pose, z_offset=self.pre_grasp_offset)
+        self.get_logger().info("Moving to pre-place position")
+        traj = self.planner.plan_to_pose(pre_place)
+        if not traj:
+            return False
+        self.planner.execute_trajectory(traj)
+
+        # Step 7: Descend to place
+        self.get_logger().info("Placing object")
+        traj = self.planner.plan_to_pose(place_pose)
+        if not traj:
+            return False
+        self.planner.execute_trajectory(traj)
+
+        # Step 8: Release
+        self.get_logger().info("Releasing object")
+        self.planner.open_gripper()
+        time.sleep(0.5)
+
+        # Step 9: Retreat
+        self.get_logger().info("Retreating")
+        traj = self.planner.plan_to_pose(pre_place)
+        if not traj:
+            return False
+        self.planner.execute_trajectory(traj)
+
+        self.get_logger().info("Pick-and-place complete")
+        return True
+
+    def _offset_pose(self, pose, z_offset):
+        """Create a new pose offset vertically from the given pose."""
+        offset = Pose()
+        offset.position.x = pose.position.x
+        offset.position.y = pose.position.y
+        offset.position.z = pose.position.z + z_offset
+        offset.orientation = pose.orientation
+        return offset
+```
+
+---
+
+## Tactile Sensing
+
+Tactile sensors provide contact information that vision cannot: grip force, slip detection, and contact geometry. They are essential for robust grasping.
+
+### Tactile Sensor Types
+
+| Sensor Type | Measurement | Resolution | Response Time | Example |
+|------------|-------------|------------|---------------|---------|
+| **Resistive** | Force magnitude | Low (single point) | Fast (1ms) | FSR-402 |
+| **Capacitive** | Force + proximity | Medium (array) | Fast (5ms) | Pressure Profile Systems |
+| **Optical (GelSight)** | 3D contact geometry | Very high (image) | Medium (30ms) | GelSight Mini |
+| **Piezoelectric** | Dynamic force/vibration | High | Very fast (0.1ms) | PVDF films |
+| **Barometric** | Normal force distribution | Medium (array) | Fast (5ms) | BioTac |
+
+### Processing Tactile Data for Grasp Stability
+
+```python
+import rclpy
+from rclpy.node import Node
+from std_msgs.msg import Float32MultiArray
+from geometry_msgs.msg import WrenchStamped
+import numpy as np
+
+class TactileGraspMonitor(Node):
+    """Monitor tactile sensors to detect grasp stability and slip."""
+
+    def __init__(self):
+        super().__init__('tactile_grasp_monitor')
+
+        # Subscribe to tactile sensor arrays on each finger
+        self.left_tactile_sub = self.create_subscription(
+            Float32MultiArray, '/gripper/left_finger/tactile',
+            lambda msg: self.tactile_callback(msg, 'left'), 10
+        )
+        self.right_tactile_sub = self.create_subscription(
+            Float32MultiArray, '/gripper/right_finger/tactile',
+            lambda msg: self.tactile_callback(msg, 'right'), 10
+        )
+
+        # State tracking
+        self.left_forces = np.zeros(16)   # 4x4 tactile array
+        self.right_forces = np.zeros(16)
+        self.force_history = []
+        self.slip_threshold = 0.15        # Force rate of change for slip
+
+        # Grasp state publisher
+        self.grasp_state_pub = self.create_publisher(
+            Float32MultiArray, '/gripper/grasp_state', 10
+        )
+
+        self.timer = self.create_timer(0.02, self.evaluate_grasp)  # 50 Hz
+
+    def tactile_callback(self, msg, finger):
+        """Update tactile readings from a finger."""
+        forces = np.array(msg.data)
+        if finger == 'left':
+            self.left_forces = forces
+        else:
+            self.right_forces = forces
+
+    def evaluate_grasp(self):
+        """Evaluate current grasp stability from tactile data."""
+        left_total = np.sum(self.left_forces)
+        right_total = np.sum(self.right_forces)
+        total_force = left_total + right_total
+
+        # Detect contact
+        in_contact = total_force > 0.5  # Minimum contact threshold (N)
+
+        # Force balance: symmetric forces indicate centered grasp
+        if total_force > 0:
+            balance = 1.0 - abs(left_total - right_total) / total_force
+        else:
+            balance = 0.0
+
+        # Contact area: count activated taxels
+        active_left = np.sum(self.left_forces > 0.1)
+        active_right = np.sum(self.right_forces > 0.1)
+        contact_area = (active_left + active_right) / 32.0  # Normalized
+
+        # Slip detection: rapid force decrease
+        self.force_history.append(total_force)
+        if len(self.force_history) > 10:
+            self.force_history.pop(0)
+
+        slip_detected = False
+        if len(self.force_history) >= 3:
+            force_rate = (self.force_history[-1] - self.force_history[-3]) / 0.04
+            slip_detected = force_rate < -self.slip_threshold and in_contact
+
+        # Compute stability score (0 to 1)
+        stability = 0.0
+        if in_contact:
+            stability = (
+                0.3 * min(total_force / 10.0, 1.0) +  # Sufficient force
+                0.3 * balance +                         # Balanced grip
+                0.2 * contact_area +                    # Large contact
+                0.2 * (0.0 if slip_detected else 1.0)  # No slip
+            )
+
+        # Log and publish
+        state = "STABLE" if stability > 0.6 else "MARGINAL" if stability > 0.3 else "UNSTABLE"
+        if slip_detected:
+            state = "SLIPPING"
+            self.get_logger().warn(
+                f"Slip detected! Force rate: {force_rate:.2f} N/s"
+            )
+
+        self.get_logger().info(
+            f"Grasp: {state} (score={stability:.2f}, "
+            f"force={total_force:.1f}N, balance={balance:.2f})",
+            throttle_duration_sec=1.0
+        )
+
+        # Publish state
+        state_msg = Float32MultiArray()
+        state_msg.data = [stability, total_force, balance,
+                          contact_area, float(slip_detected)]
+        self.grasp_state_pub.publish(state_msg)
+
+
+def main():
+    rclpy.init()
+    monitor = TactileGraspMonitor()
+    rclpy.spin(monitor)
+    rclpy.shutdown()
+
+if __name__ == '__main__':
+    main()
+```
+
+---
+
+## Summary
+
+| Concept | Key Takeaway |
+|---------|-------------|
+| **Grasp taxonomy** | Power grasps for stability, precision grasps for dexterity |
+| **Force closure** | A grasp is stable when contacts can resist arbitrary wrenches |
+| **Grasp planning** | Sample approach poses, evaluate quality, rank by force closure |
+| **MoveIt 2** | Standard framework for collision-aware arm motion planning in ROS 2 |
+| **Pick-and-place** | Structured sequence: pre-grasp, approach, grasp, lift, transport, place, release |
+| **Tactile sensing** | Provides force, slip, and contact geometry for grasp monitoring |
+
+## Exercises
+
+1. **Force Closure**: Compute force closure for a three-finger grasp on a sphere. Vary the friction coefficient from 0.2 to 1.0 and plot the quality metric.
+
+2. **Grasp Sampling**: Generate 1000 grasp candidates for a cylinder (diameter 6cm, height 15cm). Visualize the top 10 grasps and their approach directions.
+
+3. **MoveIt 2 Planning**: Configure MoveIt 2 for a 7-DOF arm. Plan paths to 10 random reachable poses and measure planning time and path length.
+
+4. **Pick-and-Place**: Implement the full pick-and-place pipeline and execute it in Gazebo. Measure success rate over 20 trials with objects of varying size.
+
+5. **Slip Detection**: Simulate a tactile sensor array with added noise. Implement the slip detection algorithm and test it by gradually reducing grip force until the object slips.
+
+## Next Steps
+
+Continue to [Conversational Robotics](/conversational-robotics/) to learn how to give your humanoid robot the ability to understand and respond to human speech and gestures.

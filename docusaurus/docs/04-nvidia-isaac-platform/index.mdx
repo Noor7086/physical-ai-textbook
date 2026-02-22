@@ -1,0 +1,148 @@
+---
+sidebar_position: 1
+title: "NVIDIA Isaac Platform"
+description: "Master NVIDIA's Isaac platform for GPU-accelerated humanoid robot simulation, synthetic data generation, and reinforcement learning"
+---
+
+# NVIDIA Isaac Platform
+
+Welcome to **Module 4**, where we step into the world of GPU-accelerated robotics simulation with NVIDIA's Isaac platform. While Gazebo (Module 3) provides an excellent open-source simulation environment, NVIDIA Isaac represents the cutting edge of high-fidelity, massively parallel simulation -- the kind of infrastructure that leading humanoid robotics companies use to train and validate their robots at scale.
+
+## What is the NVIDIA Isaac Platform?
+
+The **NVIDIA Isaac** platform is a comprehensive suite of tools, libraries, and frameworks designed to accelerate the development, simulation, and deployment of intelligent robots. Built on top of NVIDIA's GPU computing ecosystem, Isaac provides:
+
+- **Isaac Sim** -- A photorealistic, physically accurate robot simulator built on NVIDIA Omniverse
+- **Isaac Lab** (formerly Isaac Gym / Orbit) -- A lightweight reinforcement learning framework for massively parallel robot training
+- **Isaac ROS** -- GPU-accelerated ROS 2 packages for perception, navigation, and manipulation
+- **Isaac Manipulator / Perceptor** -- Pretrained models and pipelines for robotic arms and mobile robots
+
+```
+┌─────────────────────────────────────────────────────────┐
+│                  NVIDIA Isaac Platform                    │
+├──────────────┬──────────────┬──────────────┬────────────┤
+│  Isaac Sim   │  Isaac Lab   │  Isaac ROS   │  Isaac     │
+│  (Omniverse) │  (RL/GPU)    │  (Deployment)│  Perceptor │
+├──────────────┴──────────────┴──────────────┴────────────┤
+│                  NVIDIA Omniverse / USD                   │
+├─────────────────────────────────────────────────────────┤
+│              PhysX 5 / RTX Rendering / CUDA              │
+├─────────────────────────────────────────────────────────┤
+│                    NVIDIA GPU Hardware                    │
+└─────────────────────────────────────────────────────────┘
+```
+
+## Why Isaac Matters for Humanoid Robotics
+
+Training a humanoid robot to walk, manipulate objects, and navigate environments requires billions of simulation steps. Traditional CPU-based simulators struggle with this demand. Isaac changes the game by leveraging GPUs:
+
+| Capability | Traditional Simulation | NVIDIA Isaac |
+|---|---|---|
+| **Physics Steps/Second** | ~1,000 (single env) | ~1,000,000+ (parallel) |
+| **Parallel Environments** | 1-10 | 4,096-65,536 |
+| **Rendering** | Basic OpenGL | RTX ray-tracing |
+| **Sensor Simulation** | Approximate | Physically accurate |
+| **Training Time (locomotion)** | Days-weeks | Minutes-hours |
+| **Domain Randomization** | Manual setup | Built-in, GPU-accelerated |
+
+### Real-World Impact
+
+Companies building humanoid robots -- including Figure AI, Agility Robotics, Apptronik, and 1X Technologies -- rely on GPU-accelerated simulation to:
+
+1. **Train locomotion policies** that transfer to real hardware
+2. **Generate synthetic training data** for perception systems
+3. **Test manipulation strategies** across thousands of object variations
+4. **Validate safety behaviors** before deploying on physical robots
+
+## GPU-Accelerated Simulation: The Core Advantage
+
+The fundamental breakthrough of Isaac is running **both physics simulation and rendering on the GPU**, eliminating the CPU-GPU data transfer bottleneck:
+
+```python
+# Conceptual comparison: CPU vs GPU simulation
+
+# CPU-based simulation (traditional)
+for env in range(num_environments):        # Sequential
+    observations = physics_step_cpu(env)   # CPU physics
+    observations = transfer_to_gpu(obs)    # Bottleneck!
+    actions = policy_network(observations) # GPU inference
+    actions = transfer_to_cpu(actions)     # Bottleneck!
+
+# GPU-based simulation (Isaac)
+# All environments run in parallel on the GPU
+observations = physics_step_gpu(all_envs)  # GPU physics (parallel)
+actions = policy_network(observations)      # GPU inference (no transfer)
+apply_actions_gpu(all_envs, actions)        # GPU actuation (no transfer)
+```
+
+This architecture enables **thousands of simulation environments to run simultaneously** on a single GPU, with the physics, rendering, and neural network inference all operating in GPU memory without costly data transfers.
+
+## Learning Objectives
+
+By the end of this module, you will be able to:
+
+1. **Install and configure** NVIDIA Isaac Sim and Isaac Lab for humanoid robot development
+2. **Create simulation environments** using USD (Universal Scene Description) and Omniverse
+3. **Simulate humanoid robots** with PhysX 5 rigid-body and articulation physics
+4. **Generate synthetic data** for training perception models with domain randomization
+5. **Train reinforcement learning policies** for locomotion and manipulation using massively parallel GPU environments
+6. **Implement sim-to-real transfer** techniques to deploy trained policies on physical robots
+7. **Use Isaac ROS** packages for GPU-accelerated perception in deployment
+
+## Module Contents
+
+This module covers **Weeks 8-10** of the course and is organized into four chapters:
+
+### Chapter 1: NVIDIA Isaac Sim
+Deep dive into Isaac Sim built on Omniverse -- installation, USD scene creation, PhysX 5 physics, the GPU pipeline, and using Isaac Lab for structured RL training.
+
+### Chapter 2: Perception and Manipulation
+Leveraging Isaac for synthetic data generation, domain randomization, camera and sensor simulation, training object detection models, and grasp planning for manipulation tasks.
+
+### Chapter 3: Reinforcement Learning in Isaac
+Training locomotion and manipulation policies with Isaac Lab, PPO algorithms, reward shaping, massively parallel environments, and curriculum learning for humanoid robots.
+
+### Chapter 4: Sim-to-Real Transfer
+Bridging the reality gap -- domain randomization strategies, system identification, progressive transfer techniques, and deploying simulation-trained policies to real robots.
+
+## Prerequisites
+
+Before starting this module, you should have:
+
+- **Completed Modules 1-3** (Physical AI fundamentals, ROS 2, Gazebo)
+- **Python proficiency** (comfortable with NumPy, PyTorch)
+- **Basic RL knowledge** (understanding of MDPs, rewards, policies)
+- **NVIDIA GPU** with at least 8 GB VRAM (RTX 3070 or better recommended)
+- **Ubuntu 22.04** (Isaac Sim's primary supported platform)
+
+### Hardware Recommendations
+
+| Component | Minimum | Recommended |
+|---|---|---|
+| **GPU** | RTX 3070 (8 GB) | RTX 4090 (24 GB) |
+| **CPU** | Intel i7 / AMD Ryzen 7 | Intel i9 / AMD Ryzen 9 |
+| **RAM** | 32 GB | 64 GB |
+| **Storage** | 100 GB SSD | 500 GB NVMe SSD |
+| **OS** | Ubuntu 22.04 | Ubuntu 22.04 |
+
+## Key Terminology
+
+| Term | Definition |
+|---|---|
+| **Omniverse** | NVIDIA's platform for building and operating 3D simulations and digital twins |
+| **USD** | Universal Scene Description -- an open file format for 3D scene interchange |
+| **PhysX 5** | NVIDIA's GPU-accelerated physics engine with articulation support |
+| **Isaac Lab** | A modular RL framework built on Isaac Sim for robot learning research |
+| **Domain Randomization** | Varying simulation parameters to improve real-world generalization |
+| **Sim-to-Real** | The process of transferring simulation-trained models to physical robots |
+| **TensorRT** | NVIDIA's SDK for high-performance deep learning inference |
+
+## Summary
+
+NVIDIA Isaac represents a paradigm shift in how we develop intelligent robots. By harnessing the massive parallel compute power of GPUs for physics simulation, rendering, and neural network training, Isaac compresses what used to take weeks of training into hours or minutes. For humanoid robotics -- where the complexity of bipedal locomotion and dexterous manipulation demands enormous amounts of training data -- this acceleration is not just convenient, it is essential.
+
+In the chapters that follow, you will gain hands-on experience with every layer of the Isaac stack, from building simulation scenes to training walking policies to deploying on real hardware.
+
+## Next Steps
+
+Continue to [NVIDIA Isaac Sim](./isaac-sim) to begin your hands-on journey with installation, Omniverse, and building your first humanoid simulation environment.

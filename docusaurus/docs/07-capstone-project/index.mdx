@@ -1,0 +1,116 @@
+---
+sidebar_position: 1
+title: "Capstone Project"
+description: "Apply everything you have learned to build an autonomous humanoid assistant from the ground up"
+---
+
+# Capstone Project
+
+Welcome to the **Capstone Project** -- the culmination of your Physical AI and Humanoid Robotics journey. Over the final weeks of the course, you will integrate perception, navigation, manipulation, conversation, and autonomous decision-making into a single, cohesive humanoid robot system.
+
+## Project Vision
+
+Throughout this course you have studied each subsystem in isolation: ROS 2 communication, Gazebo simulation, NVIDIA Isaac perception, humanoid kinematics, and conversational AI. The capstone asks you to **compose** all of these skills into an end-to-end autonomous humanoid assistant that can operate in a realistic indoor environment.
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│                   Autonomous Humanoid Assistant                   │
+├────────────┬────────────┬──────────────┬────────────┬────────────┤
+│ Perception │ Navigation │ Manipulation │ Dialogue   │ Planning   │
+│ (Module 4) │ (Module 3) │ (Module 5)   │ (Module 6) │ (Capstone) │
+└────────────┴────────────┴──────────────┴────────────┴────────────┘
+        │            │            │             │            │
+        └────────────┴────────────┴─────────────┴────────────┘
+                              ROS 2
+                           (Module 2)
+```
+
+## Objectives
+
+By completing the capstone project you will demonstrate your ability to:
+
+1. **Architect** a multi-node ROS 2 system that coordinates perception, planning, and action
+2. **Simulate** a humanoid robot in Gazebo performing household tasks
+3. **Integrate** NVIDIA Isaac Sim or Isaac ROS for advanced perception pipelines
+4. **Implement** a behaviour-tree or state-machine planner that sequences high-level tasks
+5. **Enable** natural-language interaction so users can issue commands conversationally
+6. **Test** your system with reproducible scenarios and quantitative metrics
+7. **Document** your design decisions, trade-offs, and results professionally
+
+## Project Timeline
+
+The capstone spans **Weeks 13-16** of the course:
+
+| Week | Phase | Key Activities |
+|------|-------|---------------|
+| **13** | Design & Architecture | System design document, interface definitions, repository scaffold |
+| **14** | Core Implementation | Perception pipeline, navigation stack, manipulation primitives |
+| **15** | Integration & Testing | End-to-end integration, scenario testing, performance tuning |
+| **16** | Documentation & Demo | Final report, recorded demo, peer review |
+
+## Deliverables
+
+Your capstone submission consists of the following artifacts:
+
+### 1. Design Document (Week 13)
+- System architecture diagram
+- ROS 2 node graph with topic/service/action definitions
+- Interface contracts (message types, service definitions)
+- Risk register with mitigation strategies
+
+### 2. Working Codebase (Weeks 14-15)
+- Complete ROS 2 workspace with all packages
+- Gazebo world file with realistic indoor environment
+- Launch files that bring up the entire system
+- Configuration files (YAML) for all tuneable parameters
+
+### 3. Test Suite (Week 15)
+- Unit tests for individual nodes
+- Integration tests for subsystem interactions
+- Scenario tests that validate end-to-end behaviour
+- Performance benchmarks (latency, success rate)
+
+### 4. Final Report and Demo (Week 16)
+- Written report (8-12 pages) covering design, implementation, results, and lessons learned
+- Recorded demonstration video (5-10 minutes)
+- Peer review of one other team's project
+
+## Evaluation Overview
+
+Your project will be evaluated across five dimensions:
+
+| Dimension | Weight | What We Look For |
+|-----------|--------|-----------------|
+| **Architecture** | 20% | Clean separation of concerns, appropriate use of ROS 2 patterns |
+| **Functionality** | 30% | Robot successfully completes defined tasks in simulation |
+| **Code Quality** | 15% | Readable code, proper packaging, documentation strings |
+| **Testing** | 15% | Comprehensive tests with meaningful assertions |
+| **Report & Demo** | 20% | Clear writing, honest analysis of results and limitations |
+
+## Team Structure
+
+- Teams of **2-3 students** are recommended
+- Solo projects are permitted with adjusted scope
+- Each team member must contribute to at least two subsystems
+- Use Git with meaningful commit messages; all members must have commits
+
+## Getting Started
+
+1. Read the [Project Requirements](./project-requirements) for the full specification
+2. Follow the [Implementation Guide](./implementation-guide) for step-by-step technical guidance
+3. Set up your development environment using the [Hardware Guide](/hardware-guide/)
+
+:::tip Start Early
+The capstone integrates every module in the course. Begin your architecture design as soon as Week 13 starts -- early design decisions have outsized impact on the final result.
+:::
+
+## Support Resources
+
+- **Office Hours**: Weekly capstone-specific office hours during Weeks 13-16
+- **Discussion Forum**: Dedicated capstone channel for cross-team questions
+- **Reference Projects**: Example repositories linked in the implementation guide
+- **Mentorship**: Each team is assigned an instructor mentor for architecture review
+
+## Next Steps
+
+Continue to [Project Requirements](./project-requirements) for the complete specification of what your autonomous humanoid assistant must accomplish.

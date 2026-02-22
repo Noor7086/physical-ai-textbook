@@ -1,0 +1,28 @@
+[
+  {
+    "id": "episode-01",
+    "title": "Introduction to Physical AI",
+    "description": "Explore what Physical AI means, how it differs from traditional AI, and why embodied intelligence is the next frontier.",
+    "audioUrlEn": "/podcasts/episode-01-en.mp3",
+    "audioUrlUr": "/podcasts/episode-01-ur.mp3",
+    "durationSeconds": 600,
+    "relatedChapters": [
+      "01-introduction-to-physical-ai/index",
+      "01-introduction-to-physical-ai/embodied-intelligence"
+    ],
+    "createdAt": "2025-02-06"
+  },
+  {
+    "id": "episode-02",
+    "title": "ROS 2 and Robot Communication",
+    "description": "Deep dive into ROS 2 architecture, nodes, topics, and services - the backbone of modern robot software.",
+    "audioUrlEn": "/podcasts/episode-02-en.mp3",
+    "audioUrlUr": "/podcasts/episode-02-ur.mp3",
+    "durationSeconds": 720,
+    "relatedChapters": [
+      "02-ros2-fundamentals/index",
+      "02-ros2-fundamentals/nodes-topics-services"
+    ],
+    "createdAt": "2025-02-06"
+  }
+]

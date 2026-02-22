@@ -1,0 +1,315 @@
+/* RTL (Right-to-Left) styles for Urdu content */
+
+.rtl-content {
+    direction: rtl;
+    text-align: right;
+    font-family: "Noto Nastaliq Urdu", "Jameel Noori Nastaleeq", serif;
+}
+
+.rtl-content h1,
+.rtl-content h2,
+.rtl-content h3,
+.rtl-content h4,
+.rtl-content h5,
+.rtl-content h6 {
+    text-align: right;
+}
+
+.rtl-content ul,
+.rtl-content ol {
+    padding-right: 2rem;
+    padding-left: 0;
+}
+
+.rtl-content li {
+    text-align: right;
+}
+
+/* Keep code blocks LTR even in RTL context */
+.rtl-content pre,
+.rtl-content code {
+    direction: ltr;
+    text-align: left;
+}
+
+.rtl-content table {
+    direction: rtl;
+}
+
+.rtl-content th,
+.rtl-content td {
+    text-align: right;
+}
+
+/* Urdu content wrapper */
+.urdu-content {
+    line-height: 2;
+    font-size: 1.05em;
+}
+
+/* Import Noto Nastaliq Urdu font - must be first */
+@import url("https://fonts.googleapis.com/css2?family=Noto+Nastaliq+Urdu:wght@400;600;700&display=swap");
+
+/* ========== Full page RTL mode ========== */
+
+html[dir="rtl"] body {
+    font-family: "Noto Nastaliq Urdu", "Jameel Noori Nastaleeq", serif;
+}
+
+/* --- Navbar --- */
+html[dir="rtl"] .navbar {
+    direction: rtl;
+}
+
+/* The navbar inner container: swap left and right groups */
+html[dir="rtl"] .navbar__inner {
+    flex-direction: row-reverse;
+}
+
+/* Left items (logo, title, Textbook, Podcasts) — keep natural order, now visually on the right */
+html[dir="rtl"] .navbar__items:not(.navbar__items--right) {
+    flex-direction: row;
+}
+
+/* Right items (Personalize, Translate, Auth, GitHub) — keep natural order, now visually on the left */
+html[dir="rtl"] .navbar__items--right {
+    flex-direction: row;
+}
+
+html[dir="rtl"] .navbar__brand {
+    margin-right: 0;
+    margin-left: 1rem;
+}
+
+html[dir="rtl"] .navbar__logo {
+    margin-right: 0;
+    margin-left: 0.5rem;
+}
+
+html[dir="rtl"] .navbar__toggle {
+    margin-right: 0;
+    margin-left: auto;
+}
+
+/* --- Left sidebar (menu) --- */
+html[dir="rtl"] .menu {
+    direction: rtl;
+    text-align: right;
+}
+
+html[dir="rtl"] .menu__link {
+    text-align: right;
+    padding-right: 0.75rem;
+    padding-left: 0;
+}
+
+html[dir="rtl"] .menu__list {
+    padding-right: 0;
+    padding-left: 0;
+}
+
+html[dir="rtl"] .menu__list .menu__list {
+    padding-right: 1rem;
+    padding-left: 0;
+    margin-right: 0;
+    border-right: 1px solid var(--ifm-color-emphasis-200);
+    border-left: none;
+}
+
+html[dir="rtl"] .menu__link--sublist-caret::after {
+    margin-right: auto;
+    margin-left: 0.375rem;
+    transform: rotate(180deg);
+}
+
+html[dir="rtl"] .menu__caret::before {
+    transform: rotate(180deg);
+}
+
+html[dir="rtl"] .theme-doc-sidebar-container {
+    border-right: none;
+    border-left: 1px solid var(--ifm-toc-border-color);
+}
+
+/* --- Right sidebar (Table of Contents) --- */
+html[dir="rtl"] .table-of-contents {
+    direction: rtl;
+    text-align: right;
+}
+
+html[dir="rtl"] .table-of-contents__link {
+    text-align: right;
+}
+
+html[dir="rtl"] .table-of-contents li {
+    text-align: right;
+}
+
+html[dir="rtl"] .table-of-contents ul {
+    padding-right: 1rem;
+    padding-left: 0;
+}
+
+html[dir="rtl"] .col--3 {
+    border-right: 1px solid var(--ifm-toc-border-color);
+    border-left: none;
+}
+
+/* Swap sidebar/content column order */
+html[dir="rtl"]
+    .docItemContainer_node_modules-\@docusaurus-theme-classic-lib-theme-DocItem-Layout-styles-module,
+html[dir="rtl"] [class*="docItemContainer"] {
+    direction: rtl;
+}
+
+/* Only reverse row inside doc pages, not homepage grid */
+html[dir="rtl"] [class*="docItemCol"] .row,
+html[dir="rtl"] [class*="docRoot"] > .container > .row,
+html[dir="rtl"] .theme-doc-sidebar-container + main .row {
+    flex-direction: row-reverse;
+}
+
+/* Doc page wrapper row (sidebar + content + toc) */
+html[dir="rtl"] [class*="docPage"] > .container > .row,
+html[dir="rtl"] [class*="docRoot"] .row {
+    flex-direction: row-reverse;
+}
+
+/* --- Main content --- */
+html[dir="rtl"] .theme-doc-markdown {
+    direction: rtl;
+    text-align: right;
+}
+
+/* --- Pagination --- */
+html[dir="rtl"] .pagination-nav {
+    flex-direction: row-reverse;
+}
+
+html[dir="rtl"] .pagination-nav__link {
+    text-align: right;
+}
+
+html[dir="rtl"] .pagination-nav__sublabel {
+    text-align: right;
+}
+
+html[dir="rtl"] .pagination-nav__label {
+    text-align: right;
+}
+
+html[dir="rtl"] .pagination-nav__link--prev .pagination-nav__label::before {
+    content: " \2190";
+    margin-left: 0.5rem;
+    margin-right: 0;
+}
+
+html[dir="rtl"] .pagination-nav__link--next .pagination-nav__label::after {
+    content: " \2192";
+    margin-right: 0.5rem;
+    margin-left: 0;
+}
+
+/* --- Footer --- */
+html[dir="rtl"] .footer {
+    direction: rtl;
+    text-align: right;
+}
+
+html[dir="rtl"] .footer__links {
+    flex-direction: row-reverse;
+}
+
+html[dir="rtl"] .footer__col {
+    text-align: right;
+}
+
+/* --- Breadcrumbs --- */
+html[dir="rtl"] .breadcrumbs {
+    direction: rtl;
+}
+
+html[dir="rtl"] .breadcrumbs__item::before {
+    transform: rotate(180deg);
+}
+
+/* --- Doc page heading area --- */
+html[dir="rtl"] .theme-doc-version-badge,
+html[dir="rtl"] .theme-last-updated {
+    text-align: right;
+}
+
+/* --- Markdown rendered content alignment in RTL --- */
+html[dir="rtl"] .urdu-content h1,
+html[dir="rtl"] .urdu-content h2,
+html[dir="rtl"] .urdu-content h3,
+html[dir="rtl"] .urdu-content h4,
+html[dir="rtl"] .urdu-content h5,
+html[dir="rtl"] .urdu-content h6 {
+    text-align: right;
+}
+
+html[dir="rtl"] .urdu-content p {
+    text-align: right;
+}
+
+html[dir="rtl"] .urdu-content ul,
+html[dir="rtl"] .urdu-content ol {
+    padding-right: 2rem;
+    padding-left: 0;
+    text-align: right;
+}
+
+html[dir="rtl"] .urdu-content li {
+    text-align: right;
+}
+
+html[dir="rtl"] .urdu-content blockquote {
+    border-right: 4px solid var(--ifm-color-emphasis-300);
+    border-left: none;
+    padding-right: 1rem;
+    padding-left: 0;
+    margin-right: 0;
+}
+
+html[dir="rtl"] .urdu-content table {
+    direction: rtl;
+}
+
+html[dir="rtl"] .urdu-content th,
+html[dir="rtl"] .urdu-content td {
+    text-align: right;
+}
+
+/* Keep code blocks LTR */
+html[dir="rtl"] .urdu-content pre,
+html[dir="rtl"] .urdu-content code {
+    direction: ltr;
+    text-align: left;
+}
+
+html[dir="rtl"] pre {
+    direction: ltr;
+    text-align: left;
+}
+
+/* --- Homepage RTL --- */
+html[dir="rtl"] .hero {
+    direction: rtl;
+    text-align: center;
+}
+
+html[dir="rtl"] .hero__title,
+html[dir="rtl"] .hero__subtitle {
+    text-align: center;
+}
+
+html[dir="rtl"] .card {
+    direction: rtl;
+    text-align: right;
+}
+
+html[dir="rtl"] .card__header,
+html[dir="rtl"] .card__body {
+    text-align: right;
+}

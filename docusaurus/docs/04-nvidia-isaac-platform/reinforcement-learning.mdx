@@ -1,0 +1,590 @@
+---
+sidebar_position: 4
+title: "Reinforcement Learning"
+description: "Training locomotion and manipulation policies using Isaac Gym with PPO and SAC algorithms, reward shaping for humanoid walking, and sim-to-real training pipelines"
+---
+
+# Reinforcement Learning for Robotics in Isaac
+
+Reinforcement Learning (RL) has emerged as one of the most powerful methods for teaching humanoid robots to walk, balance, and manipulate objects. NVIDIA's **Isaac Gym** (now part of Isaac Lab) enables massively parallel GPU-accelerated training, running thousands of robot instances simultaneously. This chapter covers RL fundamentals for robotics, algorithm selection, reward design, and end-to-end training pipelines.
+
+## Learning Objectives
+
+By the end of this chapter, you will be able to:
+
+1. **Explain** the RL problem formulation for robotics control
+2. **Set up** Isaac Gym environments for humanoid locomotion training
+3. **Compare** PPO and SAC algorithms and select the right one for your task
+4. **Design** reward functions that produce stable, natural humanoid walking
+5. **Configure** training pipelines with domain randomization
+6. **Evaluate** trained policies and understand sim-to-real considerations
+
+---
+
+## RL Fundamentals for Robotics
+
+In the RL framework, a robot (agent) interacts with its environment by observing states, taking actions, and receiving rewards. The goal is to learn a **policy** that maximizes cumulative reward.
+
+```
+┌──────────────────────────────────────────────────┐
+│                 RL Training Loop                  │
+│                                                  │
+│   ┌─────────┐    action a_t    ┌─────────────┐  │
+│   │  Policy  │────────────────▶│ Environment │  │
+│   │  pi(a|s) │                 │ (Isaac Gym)  │  │
+│   │          │◀────────────────│              │  │
+│   └─────────┘  state s_{t+1}  └─────────────┘  │
+│       ▲         reward r_t          │           │
+│       │                             │           │
+│       └─────────────────────────────┘           │
+│              Gradient Update                    │
+│                                                  │
+│   Parallel: 4096 environments on one GPU         │
+└──────────────────────────────────────────────────┘
+```
+
+### The MDP Formulation
+
+| Component | Robotics Interpretation | Example (Humanoid Walking) |
+|-----------|------------------------|---------------------------|
+| **State s** | Joint positions, velocities, IMU, contacts | 60-dimensional vector |
+| **Action a** | Joint torques or position targets | 20 joint targets |
+| **Reward r** | Task performance signal | Forward velocity - energy cost |
+| **Transition T** | Physics simulation step | Isaac Gym PhysX step at 200 Hz |
+| **Discount gamma** | How much to value future rewards | 0.99 (long horizon) |
+
+### Why GPU-Parallel Simulation Matters
+
+```
+Traditional RL (CPU):
+  1 environment x 1000 steps/sec = 1,000 samples/sec
+  Time to 1B samples: ~12 days
+
+Isaac Gym (GPU):
+  4096 environments x 1000 steps/sec = 4,096,000 samples/sec
+  Time to 1B samples: ~4 minutes
+```
+
+This 4000x speedup transforms RL from impractical to practical for real robotics.
+
+---
+
+## Setting Up Isaac Gym Environments
+
+### Installing Isaac Lab
+
+```bash
+# Clone Isaac Lab (successor to Isaac Gym for Isaac Sim)
+git clone https://github.com/isaac-sim/IsaacLab.git
+cd IsaacLab
+
+# Create conda environment and install
+conda create -n isaaclab python=3.10 -y
+conda activate isaaclab
+pip install -e .
+
+# Verify GPU simulation works
+python -c "import isaaclab; print('Isaac Lab version:', isaaclab.__version__)"
+```
+
+### Defining a Humanoid Locomotion Environment
+
+```python
+import torch
+import isaaclab.envs as envs
+from isaaclab.envs import ManagerBasedRLEnvCfg
+from isaaclab.managers import ObservationGroupCfg, ObservationTermCfg
+from isaaclab.managers import RewardTermCfg, TerminationTermCfg
+
+class HumanoidLocomotionEnvCfg(ManagerBasedRLEnvCfg):
+    """Configuration for humanoid walking RL environment."""
+
+    # Simulation parameters
+    sim_dt = 0.005          # 200 Hz physics
+    control_dt = 0.02       # 50 Hz policy (decimation = 4)
+    num_envs = 4096         # Parallel environments
+    episode_length_s = 20.0 # 20-second episodes
+
+    # Robot configuration
+    robot_cfg = {
+        "usd_path": "humanoid_robot.usd",
+        "num_joints": 20,
+        "default_joint_positions": {
+            "left_hip_pitch": -0.3,
+            "left_knee": 0.6,
+            "left_ankle_pitch": -0.3,
+            "right_hip_pitch": -0.3,
+            "right_knee": 0.6,
+            "right_ankle_pitch": -0.3,
+        },
+    }
+
+
+class HumanoidObservations:
+    """Observation terms for the humanoid locomotion policy."""
+
+    @staticmethod
+    def base_linear_velocity(env):
+        """Base linear velocity in the robot frame. Shape: [N, 3]"""
+        return env.robot.root_lin_vel_b
+
+    @staticmethod
+    def base_angular_velocity(env):
+        """Base angular velocity in the robot frame. Shape: [N, 3]"""
+        return env.robot.root_ang_vel_b
+
+    @staticmethod
+    def projected_gravity(env):
+        """Gravity vector projected into the robot base frame. Shape: [N, 3]"""
+        return env.robot.projected_gravity_b
+
+    @staticmethod
+    def joint_positions_normalized(env):
+        """Joint positions normalized by their range. Shape: [N, num_joints]"""
+        pos = env.robot.joint_pos
+        default = env.robot.default_joint_pos
+        return pos - default
+
+    @staticmethod
+    def joint_velocities(env):
+        """Joint velocities. Shape: [N, num_joints]"""
+        return env.robot.joint_vel
+
+    @staticmethod
+    def previous_actions(env):
+        """Actions from the previous time step. Shape: [N, num_actions]"""
+        return env.previous_actions
+
+    @staticmethod
+    def velocity_command(env):
+        """Desired velocity command [vx, vy, omega_z]. Shape: [N, 3]"""
+        return env.command_manager.get_command("velocity")
+```
+
+---
+
+## PPO vs SAC: Algorithm Selection
+
+The two most successful RL algorithms for robotics are **Proximal Policy Optimization (PPO)** and **Soft Actor-Critic (SAC)**.
+
+| Feature | PPO | SAC |
+|---------|-----|-----|
+| **Type** | On-policy | Off-policy |
+| **Sample efficiency** | Lower (needs fresh data) | Higher (reuses old data) |
+| **GPU parallelism** | Excellent (batch collection) | Good (replay buffer) |
+| **Stability** | Very stable training | Can be unstable early on |
+| **Exploration** | Via policy entropy bonus | Built-in entropy maximization |
+| **Hyperparameter sensitivity** | Low | Moderate |
+| **Best for** | Locomotion, continuous control | Manipulation, dexterous tasks |
+| **Isaac Gym default** | Yes | Supported |
+
+### PPO Training Configuration
+
+```python
+from isaaclab_rl.rsl_rl import PPORunnerCfg, PPOAlgorithmCfg
+
+class HumanoidPPOCfg(PPORunnerCfg):
+    """PPO configuration tuned for humanoid locomotion."""
+
+    algorithm = PPOAlgorithmCfg(
+        # Core PPO hyperparameters
+        clip_param=0.2,              # Clipping range for policy ratio
+        num_learning_epochs=5,       # Epochs per PPO update
+        num_mini_batches=4,          # Mini-batches per epoch
+        learning_rate=3e-4,          # Adam learning rate
+        gamma=0.99,                  # Discount factor
+        lam=0.95,                    # GAE lambda
+        entropy_coef=0.01,           # Entropy bonus coefficient
+        value_loss_coef=1.0,         # Value function loss weight
+        max_grad_norm=1.0,           # Gradient clipping
+        desired_kl=0.01,             # KL target for adaptive LR
+        schedule="adaptive",         # LR schedule type
+    )
+
+    # Network architecture
+    policy_network = {
+        "type": "mlp",
+        "hidden_dims": [512, 256, 128],
+        "activation": "elu",
+    }
+    value_network = {
+        "type": "mlp",
+        "hidden_dims": [512, 256, 128],
+        "activation": "elu",
+    }
+
+    # Training schedule
+    max_iterations = 3000
+    save_interval = 100
+    log_interval = 10
+    num_steps_per_env = 24        # Steps collected per env before update
+```
+
+### SAC Training Configuration
+
+```python
+class HumanoidSACCfg:
+    """SAC configuration for dexterous manipulation tasks."""
+
+    # Core SAC hyperparameters
+    learning_rate_actor = 3e-4
+    learning_rate_critic = 3e-4
+    learning_rate_alpha = 3e-4      # Entropy temperature
+    gamma = 0.99
+    tau = 0.005                     # Soft target update rate
+    batch_size = 256
+    replay_buffer_size = 1_000_000
+    initial_random_steps = 10_000   # Random exploration before learning
+
+    # Automatic entropy tuning
+    auto_entropy_tuning = True
+    target_entropy = "auto"         # -dim(action_space)
+
+    # Network architecture
+    actor_hidden_dims = [256, 256]
+    critic_hidden_dims = [256, 256]
+    num_critics = 2                 # Twin critics for stability
+```
+
+---
+
+## Reward Shaping for Humanoid Walking
+
+Reward design is the most critical and nuanced part of RL for robotics. A poorly designed reward leads to unnatural gaits, unstable walking, or complete training failure.
+
+### Reward Component Breakdown
+
+```python
+class HumanoidRewards:
+    """Reward terms for humanoid locomotion training.
+
+    The total reward is a weighted sum of individual terms:
+        r_total = sum(w_i * r_i)
+
+    Positive rewards encourage desired behavior.
+    Negative rewards (penalties) discourage undesired behavior.
+    """
+
+    @staticmethod
+    def forward_velocity(env, target_velocity=1.0):
+        """Reward for matching the commanded forward velocity.
+
+        This is the primary task reward. We use an exponential kernel
+        to give partial credit for being close to the target.
+        """
+        forward_vel = env.robot.root_lin_vel_b[:, 0]  # x-velocity
+        target = env.command_manager.get_command("velocity")[:, 0]
+        error = torch.abs(forward_vel - target)
+        return torch.exp(-error / 0.25)  # Weight: 1.0
+
+    @staticmethod
+    def lateral_velocity_penalty(env):
+        """Penalize lateral (sideways) motion for straight walking."""
+        lateral_vel = env.robot.root_lin_vel_b[:, 1]  # y-velocity
+        return -torch.square(lateral_vel)  # Weight: 0.5
+
+    @staticmethod
+    def angular_velocity_penalty(env):
+        """Penalize unwanted yaw rotation."""
+        yaw_vel = env.robot.root_ang_vel_b[:, 2]  # z-angular velocity
+        target_yaw = env.command_manager.get_command("velocity")[:, 2]
+        error = torch.square(yaw_vel - target_yaw)
+        return -error  # Weight: 0.5
+
+    @staticmethod
+    def upright_reward(env):
+        """Reward for keeping the torso upright.
+
+        Uses the z-component of the projected gravity vector.
+        When perfectly upright, projected_gravity_z = -1.0.
+        """
+        gravity_z = env.robot.projected_gravity_b[:, 2]
+        return (gravity_z + 1.0).clamp(min=0.0)  # Weight: 0.2
+
+    @staticmethod
+    def energy_penalty(env):
+        """Penalize excessive joint torques to encourage efficiency.
+
+        Humanoid walking should be energy-efficient, mimicking the
+        passive dynamics of human gait.
+        """
+        torques = env.robot.joint_torques
+        return -torch.sum(torch.square(torques), dim=-1)  # Weight: 0.001
+
+    @staticmethod
+    def action_smoothness_penalty(env):
+        """Penalize rapid changes in action to produce smooth motions."""
+        current = env.actions
+        previous = env.previous_actions
+        return -torch.sum(torch.square(current - previous), dim=-1)  # Weight: 0.01
+
+    @staticmethod
+    def joint_limit_penalty(env):
+        """Penalize joints approaching their limits."""
+        pos = env.robot.joint_pos
+        lower = env.robot.joint_lower_limits
+        upper = env.robot.joint_upper_limits
+        margin = 0.1  # radians from limit
+
+        below_lower = (pos < lower + margin).float()
+        above_upper = (pos > upper - margin).float()
+        violations = below_lower + above_upper
+        return -torch.sum(violations, dim=-1)  # Weight: 0.1
+
+    @staticmethod
+    def foot_clearance_reward(env, target_height=0.04):
+        """Reward for lifting the swing foot to avoid scuffing."""
+        left_foot_height = env.robot.body_pos_w[:, env.foot_indices[0], 2]
+        right_foot_height = env.robot.body_pos_w[:, env.foot_indices[1], 2]
+
+        left_vel = torch.norm(env.robot.body_lin_vel_w[:, env.foot_indices[0], :2], dim=-1)
+        right_vel = torch.norm(env.robot.body_lin_vel_w[:, env.foot_indices[1], :2], dim=-1)
+
+        # Only reward clearance when the foot is moving (swing phase)
+        left_reward = torch.where(
+            left_vel > 0.1,
+            torch.clamp(left_foot_height - target_height, min=0.0),
+            torch.zeros_like(left_foot_height)
+        )
+        right_reward = torch.where(
+            right_vel > 0.1,
+            torch.clamp(right_foot_height - target_height, min=0.0),
+            torch.zeros_like(right_foot_height)
+        )
+        return left_reward + right_reward  # Weight: 0.3
+
+
+# Complete reward configuration with weights
+REWARD_CONFIG = {
+    "forward_velocity":          {"weight": 1.0,    "function": HumanoidRewards.forward_velocity},
+    "lateral_velocity_penalty":  {"weight": 0.5,    "function": HumanoidRewards.lateral_velocity_penalty},
+    "angular_velocity_penalty":  {"weight": 0.5,    "function": HumanoidRewards.angular_velocity_penalty},
+    "upright_reward":            {"weight": 0.2,    "function": HumanoidRewards.upright_reward},
+    "energy_penalty":            {"weight": 0.001,  "function": HumanoidRewards.energy_penalty},
+    "action_smoothness":         {"weight": 0.01,   "function": HumanoidRewards.action_smoothness_penalty},
+    "joint_limit_penalty":       {"weight": 0.1,    "function": HumanoidRewards.joint_limit_penalty},
+    "foot_clearance":            {"weight": 0.3,    "function": HumanoidRewards.foot_clearance_reward},
+}
+```
+
+### Reward Shaping Anti-Patterns
+
+| Anti-Pattern | Problem | Better Approach |
+|-------------|---------|-----------------|
+| Sparse reward only (reach goal) | Agent never discovers the reward | Add shaping terms for sub-goals |
+| Huge penalty for falling | Agent learns to stand still | Moderate penalty + velocity reward |
+| Reward raw speed only | Unnatural, unstable gait | Add smoothness and energy terms |
+| No action penalty | Jerky, oscillating motions | Penalize action magnitude and rate |
+| Fixed target velocity | Cannot generalize to different speeds | Randomize velocity commands |
+
+---
+
+## Training Pipeline
+
+### End-to-End Training Script
+
+```python
+import torch
+from isaaclab.envs import ManagerBasedRLEnv
+from isaaclab_rl.rsl_rl import PPORunner
+
+def train_humanoid_locomotion():
+    """Complete training pipeline for humanoid walking."""
+
+    # Create the parallel environment
+    env = ManagerBasedRLEnv(
+        cfg=HumanoidLocomotionEnvCfg(),
+        render_mode=None,  # Headless for training speed
+    )
+    print(f"Created {env.num_envs} parallel environments")
+    print(f"Observation space: {env.observation_space}")
+    print(f"Action space: {env.action_space}")
+
+    # Create the PPO runner
+    runner = PPORunner(
+        env=env,
+        cfg=HumanoidPPOCfg(),
+        log_dir="./logs/humanoid_walk",
+        device="cuda:0",
+    )
+
+    # Training loop
+    print("Starting training...")
+    runner.learn(
+        num_learning_iterations=3000,
+        init_at_random_ep_len=True,  # Stagger episode resets
+    )
+
+    # Save the trained policy
+    runner.save("./checkpoints/humanoid_walk_final.pt")
+    print("Training complete. Policy saved.")
+
+    env.close()
+
+
+if __name__ == "__main__":
+    train_humanoid_locomotion()
+```
+
+### Training with Domain Randomization
+
+```python
+class DomainRandomizationCfg:
+    """Randomization applied during training for robust policies."""
+
+    # Physics randomization
+    friction_range = (0.5, 1.5)        # Ground friction coefficient
+    restitution_range = (0.0, 0.3)     # Bounciness
+    added_mass_range = (-1.0, 3.0)     # kg added to torso
+
+    # Motor randomization
+    motor_strength_range = (0.8, 1.2)  # Scale factor on motor torques
+    motor_offset_range = (-0.05, 0.05) # Joint position offset (rad)
+
+    # Observation noise
+    joint_pos_noise = 0.01             # rad standard deviation
+    joint_vel_noise = 1.5              # rad/s standard deviation
+    gravity_noise = 0.05               # Gravity direction noise
+
+    # External disturbances
+    push_interval_s = 8.0              # Apply random push every 8s
+    push_velocity_range = (0.5, 1.5)   # m/s push magnitude
+
+    # Terrain randomization
+    terrain_types = ["flat", "rough", "slope", "stairs"]
+    terrain_roughness_range = (0.0, 0.05)  # meters
+    slope_range = (-0.2, 0.2)              # radians
+
+
+def apply_randomization(env, cfg):
+    """Apply domain randomization at episode reset."""
+    num_envs = env.num_envs
+
+    # Randomize friction
+    friction = torch.empty(num_envs).uniform_(*cfg.friction_range)
+    env.scene.set_ground_friction(friction)
+
+    # Randomize robot mass
+    added_mass = torch.empty(num_envs).uniform_(*cfg.added_mass_range)
+    env.robot.set_added_mass(added_mass, body_name="torso")
+
+    # Randomize motor strength
+    motor_scale = torch.empty(num_envs, env.robot.num_joints).uniform_(
+        *cfg.motor_strength_range
+    )
+    env.robot.set_motor_strength_scale(motor_scale)
+
+    # Add observation noise
+    env.robot.set_joint_pos_noise(cfg.joint_pos_noise)
+    env.robot.set_joint_vel_noise(cfg.joint_vel_noise)
+```
+
+### Monitoring Training Progress
+
+```
+Typical training log output:
+
+Iteration    Reward    Episode Len    Policy Loss    Value Loss    LR
+---------    ------    -----------    -----------    ----------    --------
+    100       2.34        150           -0.012         0.45       3.0e-4
+    500       8.71        450           -0.008         0.21       2.5e-4
+   1000      14.52        800           -0.005         0.12       1.8e-4
+   1500      18.30       1000           -0.003         0.08       1.2e-4
+   2000      20.15       1000           -0.002         0.05       8.0e-5
+   2500      21.40       1000           -0.002         0.04       5.0e-5
+   3000      22.10       1000           -0.001         0.03       3.0e-5
+
+Key metrics to watch:
+  - Reward increasing and plateauing = learning successfully
+  - Episode length increasing = robot walking longer before falling
+  - Policy loss near zero = stable policy updates
+  - Value loss decreasing = better reward prediction
+```
+
+---
+
+## Evaluating Trained Policies
+
+```python
+def evaluate_policy(checkpoint_path, num_episodes=100):
+    """Evaluate a trained policy and compute performance metrics."""
+
+    env = ManagerBasedRLEnv(
+        cfg=HumanoidLocomotionEnvCfg(),
+        render_mode="human",  # Enable visualization
+    )
+
+    # Load the trained policy
+    policy = torch.jit.load(checkpoint_path).to("cuda:0")
+    policy.eval()
+
+    metrics = {
+        "episode_rewards": [],
+        "episode_lengths": [],
+        "forward_velocities": [],
+        "energy_costs": [],
+        "fall_count": 0,
+    }
+
+    obs = env.reset()
+    episode_reward = 0.0
+    episode_length = 0
+
+    for step in range(num_episodes * 1000):
+        with torch.no_grad():
+            actions = policy(obs)
+
+        obs, rewards, dones, infos = env.step(actions)
+        episode_reward += rewards.mean().item()
+        episode_length += 1
+
+        if dones.any():
+            metrics["episode_rewards"].append(episode_reward)
+            metrics["episode_lengths"].append(episode_length)
+            metrics["fall_count"] += int(infos.get("fell", False))
+            episode_reward = 0.0
+            episode_length = 0
+
+    # Compute summary statistics
+    avg_reward = sum(metrics["episode_rewards"]) / len(metrics["episode_rewards"])
+    avg_length = sum(metrics["episode_lengths"]) / len(metrics["episode_lengths"])
+    fall_rate = metrics["fall_count"] / len(metrics["episode_rewards"])
+
+    print(f"Evaluation Results ({num_episodes} episodes):")
+    print(f"  Average reward:   {avg_reward:.2f}")
+    print(f"  Average length:   {avg_length:.0f} steps")
+    print(f"  Fall rate:        {fall_rate:.1%}")
+
+    env.close()
+    return metrics
+```
+
+---
+
+## Summary
+
+| Concept | Key Takeaway |
+|---------|-------------|
+| **RL for robotics** | Agent learns a policy mapping observations to actions by maximizing reward |
+| **Isaac Gym** | GPU-parallel simulation enables 4096+ simultaneous environments |
+| **PPO** | On-policy, stable, excellent for locomotion tasks |
+| **SAC** | Off-policy, sample-efficient, strong for manipulation |
+| **Reward shaping** | Weighted combination of task, regularization, and safety terms |
+| **Domain randomization** | Randomize physics, motors, and observations during training for robustness |
+| **Training pipeline** | Configure env, algorithm, randomization; train for 2000-3000 iterations |
+
+## Exercises
+
+1. **Reward Ablation**: Train three policies with (a) only forward velocity reward, (b) forward velocity + energy penalty, (c) full reward set. Compare the resulting gaits qualitatively and quantitatively.
+
+2. **Hyperparameter Sweep**: Vary the PPO clipping parameter (0.1, 0.2, 0.3) and learning rate (1e-4, 3e-4, 1e-3). Plot training curves and identify the best combination.
+
+3. **Velocity Tracking**: Train a policy that can track variable velocity commands (0.0 to 2.0 m/s). Evaluate how well the robot matches the commanded speed.
+
+4. **Push Recovery**: Train a policy with and without random pushes during training. Test both policies with standardized pushes and compare recovery success rates.
+
+5. **Algorithm Comparison**: Train the same locomotion task with PPO and SAC. Compare sample efficiency, final performance, and training wall-clock time.
+
+## Next Steps
+
+Continue to [Sim-to-Real Transfer](./sim-to-real) to learn how to deploy policies trained in simulation onto physical robots, including domain randomization strategies and reality gap mitigation.

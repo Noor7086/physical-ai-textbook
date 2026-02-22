@@ -1,55 +1,170 @@
-# [PROJECT_NAME] Constitution
-<!-- Example: Spec Constitution, TaskFlow Constitution, etc. -->
+<!--
+  SYNC IMPACT REPORT
+  ==================
+  Version change: 0.0.0 → 1.0.0 (Initial constitution)
+  
+  Added Principles:
+  - I. Content-First Development
+  - II. Spec-Driven Workflow
+  - III. Bilingual Accessibility
+  - IV. AI-Native Integration
+  - V. User-Centric Personalization
+  - VI. Deployability & Demo-Ready
+  
+  Added Sections:
+  - Technical Standards
+  - Quality Gates
+  - Governance
+  
+  Templates Status:
+  - .specify/templates/plan-template.md ✅ (compatible, no changes needed)
+  - .specify/templates/spec-template.md ✅ (compatible, no changes needed)
+  - .specify/templates/tasks-template.md ✅ (compatible, no changes needed)
+  
+  Follow-up TODOs: None
+-->
+
+# Physical AI & Humanoid Robotics Textbook Constitution
 
 ## Core Principles
 
-### [PRINCIPLE_1_NAME]
-<!-- Example: I. Library-First -->
-[PRINCIPLE_1_DESCRIPTION]
-<!-- Example: Every feature starts as a standalone library; Libraries must be self-contained, independently testable, documented; Clear purpose required - no organizational-only libraries -->
+### I. Content-First Development
 
-### [PRINCIPLE_2_NAME]
-<!-- Example: II. CLI Interface -->
-[PRINCIPLE_2_DESCRIPTION]
-<!-- Example: Every library exposes functionality via CLI; Text in/out protocol: stdin/args → stdout, errors → stderr; Support JSON + human-readable formats -->
+The textbook content is the primary deliverable. All technical features (chatbot, auth, personalization) exist to enhance the learning experience, not replace it.
 
-### [PRINCIPLE_3_NAME]
-<!-- Example: III. Test-First (NON-NEGOTIABLE) -->
-[PRINCIPLE_3_DESCRIPTION]
-<!-- Example: TDD mandatory: Tests written → User approved → Tests fail → Then implement; Red-Green-Refactor cycle strictly enforced -->
+- Content MUST follow the official 13-week course syllabus with 4 modules
+- Each chapter MUST include learning objectives, core content, code examples, and exercises
+- Technical accuracy MUST be verified against official documentation (ROS 2, NVIDIA Isaac, Gazebo)
+- Code examples MUST be runnable and tested in the target environment
 
-### [PRINCIPLE_4_NAME]
-<!-- Example: IV. Integration Testing -->
-[PRINCIPLE_4_DESCRIPTION]
-<!-- Example: Focus areas requiring integration tests: New library contract tests, Contract changes, Inter-service communication, Shared schemas -->
+### II. Spec-Driven Workflow
 
-### [PRINCIPLE_5_NAME]
-<!-- Example: V. Observability, VI. Versioning & Breaking Changes, VII. Simplicity -->
-[PRINCIPLE_5_DESCRIPTION]
-<!-- Example: Text I/O ensures debuggability; Structured logging required; Or: MAJOR.MINOR.BUILD format; Or: Start simple, YAGNI principles -->
+All features MUST follow the Spec-Driven Development (SDD) workflow using Spec-Kit Plus.
 
-### [PRINCIPLE_6_NAME]
+- Every feature begins with a specification (`spec.md`) before implementation
+- Implementation plans (`plan.md`) MUST be created before coding
+- Tasks (`tasks.md`) MUST be broken down into independently testable units
+- Prompt History Records (PHRs) MUST be created for all significant work sessions
+- Architecture Decision Records (ADRs) MUST document significant technical choices
 
+### III. Bilingual Accessibility
 
-[PRINCIPLE__DESCRIPTION]
+The textbook MUST be accessible in both English and Urdu to serve the Pakistani developer community.
 
-## [SECTION_2_NAME]
-<!-- Example: Additional Constraints, Security Requirements, Performance Standards, etc. -->
+- Primary content MUST be written in English
+- Urdu translation MUST be available via a chapter-level toggle button
+- Urdu content MUST display with proper RTL (right-to-left) styling
+- Podcasts MUST be generated in both English and Urdu
+- Technical terms MAY remain in English with Urdu explanations where helpful
 
-[SECTION_2_CONTENT]
-<!-- Example: Technology stack requirements, compliance standards, deployment policies, etc. -->
+### IV. AI-Native Integration
 
-## [SECTION_3_NAME]
-<!-- Example: Development Workflow, Review Process, Quality Gates, etc. -->
+The textbook MUST leverage AI to enhance the learning experience through intelligent features.
 
-[SECTION_3_CONTENT]
-<!-- Example: Code review requirements, testing gates, deployment approval process, etc. -->
+- RAG chatbot MUST be embedded and able to answer questions about book content
+- Chatbot MUST support "selected text" queries (answer questions about highlighted content)
+- OpenAI Agents SDK MUST be used for chatbot intelligence
+- Qdrant Cloud MUST be used for vector storage (Free Tier)
+- Neon Serverless Postgres MUST be used for relational data
+
+### V. User-Centric Personalization
+
+Content MUST adapt to the user's background and learning needs when authenticated.
+
+- Signup flow MUST collect user's software background (Python, ROS, ML experience)
+- Signup flow MUST collect user's hardware background (Arduino, Jetson, robots)
+- Personalization button MUST adapt chapter content based on user profile
+- Better-Auth MUST be used for authentication
+- User profiles MUST be stored in Neon Postgres
+
+### VI. Deployability & Demo-Ready
+
+The project MUST be deployable and demonstrable at all times.
+
+- Docusaurus MUST be used as the book framework
+- Deployment MUST work on GitHub Pages or Vercel
+- Demo video MUST be under 90 seconds
+- All features MUST be functional in the deployed environment
+- Environment variables MUST be properly configured for production
+
+## Technical Standards
+
+### Technology Stack
+
+| Component | Technology | Requirement |
+|-----------|------------|-------------|
+| Book Framework | Docusaurus 3.x | MUST use |
+| Backend API | FastAPI | MUST use |
+| AI/Chatbot | OpenAI Agents SDK | MUST use |
+| Vector DB | Qdrant Cloud Free Tier | MUST use |
+| Database | Neon Serverless Postgres | MUST use |
+| Authentication | Better-Auth | MUST use for bonus |
+| Deployment | GitHub Pages or Vercel | MUST use |
+
+### Code Quality
+
+- Python code MUST follow PEP 8 style guidelines
+- TypeScript/JavaScript MUST use ESLint with recommended rules
+- All API endpoints MUST have proper error handling
+- Secrets MUST NOT be committed to the repository
+- Environment variables MUST be documented in `.env.example`
+
+### Content Structure
+
+```
+docs/
+├── 01-introduction-to-physical-ai/
+├── 02-ros2-fundamentals/
+├── 03-gazebo-simulation/
+├── 04-unity-visualization/
+├── 05-nvidia-isaac-platform/
+├── 06-humanoid-development/
+├── 07-conversational-robotics/
+├── 08-capstone-project/
+├── 09-hardware-guide/
+└── 10-appendices/
+```
+
+## Quality Gates
+
+### Before Merge
+
+- [ ] Content reviewed for technical accuracy
+- [ ] Code examples tested and working
+- [ ] Urdu translations reviewed for accuracy (when applicable)
+- [ ] Chatbot can answer questions about new content
+- [ ] No console errors in browser
+- [ ] Deployment preview works correctly
+
+### Before Release
+
+- [ ] All 4 course modules have complete content
+- [ ] RAG chatbot functional with book content indexed
+- [ ] Authentication flow works end-to-end (if implemented)
+- [ ] Personalization feature works (if implemented)
+- [ ] Translation toggle works (if implemented)
+- [ ] Podcasts embedded and playable (if implemented)
+- [ ] Demo video created (under 90 seconds)
 
 ## Governance
-<!-- Example: Constitution supersedes all other practices; Amendments require documentation, approval, migration plan -->
 
-[GOVERNANCE_RULES]
-<!-- Example: All PRs/reviews must verify compliance; Complexity must be justified; Use [GUIDANCE_FILE] for runtime development guidance -->
+This constitution establishes the foundational principles for the Physical AI & Humanoid Robotics Textbook project. All development work MUST comply with these principles.
 
-**Version**: [CONSTITUTION_VERSION] | **Ratified**: [RATIFICATION_DATE] | **Last Amended**: [LAST_AMENDED_DATE]
-<!-- Example: Version: 2.1.1 | Ratified: 2025-06-13 | Last Amended: 2025-07-16 -->
+### Amendment Process
+
+1. Propose amendment via Pull Request modifying this file
+2. Document rationale for change
+3. Update version number according to semantic versioning:
+   - MAJOR: Principle removal or fundamental redefinition
+   - MINOR: New principle or significant expansion
+   - PATCH: Clarification or wording improvement
+4. Update `LAST_AMENDED_DATE`
+5. Review and merge
+
+### Compliance
+
+- All PRs MUST be reviewed against constitutional principles
+- Violations MUST be documented with justification if unavoidable
+- Plan template includes "Constitution Check" gate for validation
+
+**Version**: 1.0.0 | **Ratified**: 2025-02-06 | **Last Amended**: 2025-02-06

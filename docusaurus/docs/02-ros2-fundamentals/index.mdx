@@ -1,0 +1,143 @@
+---
+sidebar_position: 1
+title: "ROS 2 Fundamentals"
+description: "Introduction to the Robot Operating System 2 for humanoid robotics"
+---
+
+# ROS 2 Fundamentals
+
+Welcome to **ROS 2** (Robot Operating System 2) - the industry-standard middleware for building robot software. This module covers Weeks 3-5 of the course.
+
+## What is ROS 2?
+
+ROS 2 is not an operating system in the traditional sense. It's a **middleware framework** that provides:
+
+- **Communication Infrastructure** - Publish/subscribe messaging, services, actions
+- **Hardware Abstraction** - Standard interfaces for sensors and actuators
+- **Package Management** - Reusable software components
+- **Tools and Utilities** - Visualization, debugging, simulation
+
+```python
+# A simple ROS 2 node in Python
+import rclpy
+from rclpy.node import Node
+
+class MinimalNode(Node):
+    def __init__(self):
+        super().__init__('minimal_node')
+        self.get_logger().info('Hello from ROS 2!')
+
+def main():
+    rclpy.init()
+    node = MinimalNode()
+    rclpy.spin(node)
+    rclpy.shutdown()
+
+if __name__ == '__main__':
+    main()
+```
+
+## Why ROS 2 for Humanoids?
+
+| Feature | Benefit for Humanoids |
+|---------|----------------------|
+| **Real-time Support** | Critical for balance and motion control |
+| **DDS Communication** | Reliable data distribution |
+| **Multi-platform** | Works on embedded systems (Jetson) |
+| **Large Ecosystem** | Extensive packages for perception, planning |
+| **Industry Adoption** | Standard in robotics industry |
+
+## ROS 2 Architecture
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                     ROS 2 Application                        │
+├─────────────────────────────────────────────────────────────┤
+│   Node A        Node B        Node C        Node D          │
+│   (Sensor)      (Planner)     (Controller)  (Actuator)      │
+└─────┬─────────────┬─────────────┬─────────────┬─────────────┘
+      │             │             │             │
+      ▼             ▼             ▼             ▼
+┌─────────────────────────────────────────────────────────────┐
+│                    ROS 2 Middleware (DDS)                    │
+│         Topics • Services • Actions • Parameters             │
+└─────────────────────────────────────────────────────────────┘
+      │             │             │             │
+      ▼             ▼             ▼             ▼
+┌─────────────────────────────────────────────────────────────┐
+│                    Operating System (Linux)                  │
+└─────────────────────────────────────────────────────────────┘
+```
+
+## Learning Objectives
+
+By the end of this module, you will be able to:
+
+1. **Create** ROS 2 nodes using Python (rclpy)
+2. **Implement** publishers and subscribers for robot communication
+3. **Use** services and actions for request-response patterns
+4. **Build** ROS 2 packages with proper structure
+5. **Write** launch files to start complex robot systems
+6. **Understand** URDF format for robot description
+
+## Module Contents
+
+| Chapter | Topic | Duration |
+|---------|-------|----------|
+| 2.1 | [Nodes, Topics, and Services](./nodes-topics-services) | Week 3 |
+| 2.2 | [Python Packages](./python-packages) | Week 4 |
+| 2.3 | [Launch Files](./launch-files) | Week 4 |
+| 2.4 | [URDF for Humanoids](./urdf-humanoids) | Week 5 |
+
+## Prerequisites
+
+Before starting this module, ensure you have:
+
+- Ubuntu 22.04 LTS installed
+- ROS 2 Humble installed
+- Python 3.10+ configured
+- Basic Python programming knowledge
+
+### Quick ROS 2 Installation
+
+```bash
+# Add ROS 2 repository
+sudo apt update && sudo apt install -y software-properties-common
+sudo add-apt-repository universe
+sudo apt update && sudo apt install curl -y
+sudo curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key \
+  -o /usr/share/keyrings/ros-archive-keyring.gpg
+
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/ros-archive-keyring.gpg] \
+  http://packages.ros.org/ros2/ubuntu $(. /etc/os-release && echo $UBUNTU_CODENAME) main" \
+  | sudo tee /etc/apt/sources.list.d/ros2.list > /dev/null
+
+# Install ROS 2 Humble
+sudo apt update
+sudo apt install ros-humble-desktop
+
+# Source ROS 2
+echo "source /opt/ros/humble/setup.bash" >> ~/.bashrc
+source ~/.bashrc
+```
+
+## Key Concepts Preview
+
+### Nodes
+The basic building blocks - independent processes that perform computation.
+
+### Topics
+Named buses for publish/subscribe communication between nodes.
+
+### Services
+Request/response communication for synchronous operations.
+
+### Actions
+Long-running tasks with feedback and cancellation support.
+
+### Parameters
+Runtime configuration values for nodes.
+
+## Next Steps
+
+Start with [Nodes, Topics, and Services](./nodes-topics-services) to learn the fundamental communication patterns in ROS 2.

@@ -1,0 +1,694 @@
+---
+sidebar_position: 4
+title: "Multimodal Interaction"
+description: "Combining vision, speech, and gesture recognition with multimodal LLMs for context-aware human-robot interaction and building a multimodal robot assistant pipeline"
+---
+
+# Multimodal Interaction
+
+A truly capable humanoid robot does not rely on a single communication channel. It combines **vision**, **speech**, and **gesture** understanding to interpret human intent holistically -- just as humans do. This chapter covers how to build a multimodal interaction pipeline that fuses multiple sensory inputs, leverages multimodal Large Language Models (LLMs), and generates context-aware robot responses.
+
+## Learning Objectives
+
+By the end of this chapter, you will be able to:
+
+1. **Design** a multimodal perception pipeline that fuses vision, speech, and gesture
+2. **Integrate** multimodal LLMs to interpret combined sensory inputs
+3. **Implement** human intent recognition from multiple modalities
+4. **Build** context-aware response generation for a robot assistant
+5. **Construct** an end-to-end multimodal interaction node in ROS 2
+6. **Evaluate** the performance and latency of multimodal systems
+
+---
+
+## Why Multimodal?
+
+Human communication is inherently multimodal. A person might say "put that over there" while pointing at an object and gesturing toward a shelf. No single modality captures the full intent.
+
+```
+┌────────────────────────────────────────────────────────┐
+│              Human Communication Channels               │
+│                                                        │
+│  Speech:  "Put that over there"                        │
+│            ─── provides action + deictic references     │
+│                                                        │
+│  Gesture: [points at cup] [points at shelf]            │
+│            ─── resolves "that" and "there"             │
+│                                                        │
+│  Gaze:    [looks at cup, then shelf]                   │
+│            ─── confirms targets, signals engagement     │
+│                                                        │
+│  Context: [robot previously asked "what should I do?"] │
+│            ─── provides conversational grounding        │
+│                                                        │
+│  Fused:   PICK(cup) -> PLACE(shelf)                    │
+│            ─── unambiguous robot action                 │
+└────────────────────────────────────────────────────────┘
+```
+
+### Modality Comparison
+
+| Modality | Strengths | Limitations | Latency |
+|----------|-----------|------------|---------|
+| **Speech** | Rich semantics, natural for commands | Ambiguous references ("that"), noise | 500-2000ms (ASR + NLU) |
+| **Vision** | Object identification, spatial understanding | Occlusion, lighting sensitivity | 50-200ms (detection) |
+| **Gesture** | Spatial references, pointing | Limited vocabulary, occlusion | 100-300ms (pose estimation) |
+| **Gaze** | Attention tracking, intent cues | Requires eye tracker, noisy | 30-100ms |
+| **Touch** | Direct physical commands (tap, push) | Requires proximity | 10-50ms |
+
+---
+
+## Multimodal Perception Architecture
+
+```
+┌─────────┐  ┌─────────┐  ┌─────────┐  ┌─────────┐
+│  Camera  │  │  Micro-  │  │  Depth  │  │  Body   │
+│  (RGB)   │  │  phone   │  │  Sensor │  │  Tracker│
+└────┬─────┘  └────┬─────┘  └────┬────┘  └────┬────┘
+     │             │             │             │
+     ▼             ▼             ▼             ▼
+┌─────────┐  ┌─────────┐  ┌─────────┐  ┌─────────┐
+│  Object  │  │  Speech  │  │  3D     │  │  Gesture│
+│  Detect  │  │  Recog   │  │  Scene  │  │  Recog  │
+└────┬─────┘  └────┬─────┘  └────┬────┘  └────┬────┘
+     │             │             │             │
+     └──────┬──────┴──────┬──────┘             │
+            │             │                    │
+            ▼             ▼                    │
+     ┌─────────────────────────────────────────┴──┐
+     │        Multimodal Fusion Engine             │
+     │   (Temporal alignment + cross-referencing)  │
+     └──────────────────┬─────────────────────────┘
+                        │
+                        ▼
+     ┌──────────────────────────────────────────────┐
+     │     Multimodal LLM (Intent Resolution)       │
+     │   "put" + [pointed object] + [pointed loc]   │
+     │       => PLACE(cup, shelf_2)                  │
+     └──────────────────┬───────────────────────────┘
+                        │
+                        ▼
+     ┌──────────────────────────────────────────────┐
+     │        Action Planner + Safety Check          │
+     └──────────────────────────────────────────────┘
+```
+
+## Gesture Recognition
+
+Gesture recognition extracts human body pose and interprets meaningful gestures like pointing, waving, or beckoning.
+
+### Pose Estimation and Gesture Classification
+
+```python
+import numpy as np
+from dataclasses import dataclass
+from enum import Enum
+from typing import Optional
+
+class GestureType(Enum):
+    NONE = "none"
+    POINTING = "pointing"
+    WAVING = "waving"
+    BECKONING = "beckoning"
+    STOP = "stop"
+    THUMBS_UP = "thumbs_up"
+
+@dataclass
+class Gesture:
+    gesture_type: GestureType
+    confidence: float
+    direction: Optional[np.ndarray] = None  # 3D direction for pointing
+    hand: str = "right"                     # Which hand
+
+class GestureRecognizer:
+    """Recognize gestures from body pose keypoints.
+
+    Uses MediaPipe or OpenPose-style keypoints with 33 body landmarks.
+    """
+
+    # Keypoint indices (MediaPipe convention)
+    RIGHT_WRIST = 16
+    RIGHT_ELBOW = 14
+    RIGHT_SHOULDER = 12
+    RIGHT_INDEX = 20
+    LEFT_WRIST = 15
+    LEFT_ELBOW = 13
+    LEFT_SHOULDER = 11
+    LEFT_INDEX = 19
+    NOSE = 0
+
+    def __init__(self, pointing_threshold=0.7, wave_threshold=0.6):
+        self.pointing_threshold = pointing_threshold
+        self.wave_threshold = wave_threshold
+        self.wrist_history = []  # For detecting wave motion
+        self.history_max_len = 30  # ~1 second at 30fps
+
+    def recognize(self, keypoints, confidences):
+        """Classify gesture from body keypoints.
+
+        Parameters
+        ----------
+        keypoints : np.ndarray, shape (33, 3)
+            3D keypoint positions (x, y, z).
+        confidences : np.ndarray, shape (33,)
+            Detection confidence per keypoint.
+
+        Returns
+        -------
+        Gesture : detected gesture with metadata.
+        """
+        # Check for pointing gesture
+        pointing = self._detect_pointing(keypoints, confidences)
+        if pointing:
+            return pointing
+
+        # Check for waving
+        waving = self._detect_waving(keypoints, confidences)
+        if waving:
+            return waving
+
+        # Check for stop (open palm facing robot)
+        stop = self._detect_stop(keypoints, confidences)
+        if stop:
+            return stop
+
+        return Gesture(GestureType.NONE, confidence=0.0)
+
+    def _detect_pointing(self, kp, conf):
+        """Detect pointing gesture: arm extended, index finger forward."""
+        for hand, (shoulder, elbow, wrist, index) in [
+            ("right", (self.RIGHT_SHOULDER, self.RIGHT_ELBOW,
+                       self.RIGHT_WRIST, self.RIGHT_INDEX)),
+            ("left", (self.LEFT_SHOULDER, self.LEFT_ELBOW,
+                      self.LEFT_WRIST, self.LEFT_INDEX)),
+        ]:
+            if min(conf[shoulder], conf[elbow], conf[wrist], conf[index]) < 0.5:
+                continue
+
+            # Arm extension: angle at elbow should be > 150 degrees
+            upper_arm = kp[elbow] - kp[shoulder]
+            forearm = kp[wrist] - kp[elbow]
+            cos_angle = (np.dot(upper_arm, forearm) /
+                        (np.linalg.norm(upper_arm) * np.linalg.norm(forearm) + 1e-8))
+            elbow_angle = np.degrees(np.arccos(np.clip(cos_angle, -1, 1)))
+
+            if elbow_angle > 150:
+                # Compute pointing direction
+                direction = kp[index] - kp[wrist]
+                direction = direction / (np.linalg.norm(direction) + 1e-8)
+
+                score = min(1.0, (elbow_angle - 150) / 30.0)
+                if score > self.pointing_threshold:
+                    return Gesture(
+                        GestureType.POINTING,
+                        confidence=score,
+                        direction=direction,
+                        hand=hand,
+                    )
+        return None
+
+    def _detect_waving(self, kp, conf):
+        """Detect waving: hand above shoulder with lateral oscillation."""
+        wrist = kp[self.RIGHT_WRIST]
+        shoulder = kp[self.RIGHT_SHOULDER]
+
+        if conf[self.RIGHT_WRIST] < 0.5:
+            return None
+
+        # Hand must be above shoulder
+        if wrist[1] >= shoulder[1]:  # y increases downward
+            return None
+
+        # Track wrist lateral movement
+        self.wrist_history.append(wrist[0])
+        if len(self.wrist_history) > self.history_max_len:
+            self.wrist_history.pop(0)
+
+        if len(self.wrist_history) < 15:
+            return None
+
+        # Detect oscillation: count direction changes
+        diffs = np.diff(self.wrist_history[-15:])
+        sign_changes = np.sum(np.abs(np.diff(np.sign(diffs))) > 0)
+
+        if sign_changes >= 3:
+            return Gesture(
+                GestureType.WAVING,
+                confidence=min(1.0, sign_changes / 5.0),
+                hand="right",
+            )
+        return None
+
+    def _detect_stop(self, kp, conf):
+        """Detect stop gesture: open palm facing forward, arm raised."""
+        wrist = kp[self.RIGHT_WRIST]
+        shoulder = kp[self.RIGHT_SHOULDER]
+        elbow = kp[self.RIGHT_ELBOW]
+
+        if min(conf[self.RIGHT_WRIST], conf[self.RIGHT_ELBOW]) < 0.5:
+            return None
+
+        # Hand above elbow, elbow above shoulder
+        if wrist[1] < elbow[1] < shoulder[1]:
+            # Forearm roughly vertical
+            forearm = wrist - elbow
+            vertical_component = abs(forearm[1]) / (np.linalg.norm(forearm) + 1e-8)
+            if vertical_component > 0.7:
+                return Gesture(GestureType.STOP, confidence=0.8, hand="right")
+
+        return None
+```
+
+---
+
+## Multimodal Fusion
+
+The fusion engine combines outputs from all perception modules, resolves cross-modal references, and produces a unified understanding.
+
+### Temporal Alignment and Reference Resolution
+
+```python
+import time
+from dataclasses import dataclass, field
+from typing import List, Dict, Optional
+
+@dataclass
+class VisualObject:
+    label: str
+    position_3d: np.ndarray
+    confidence: float
+    bounding_box: tuple  # (x1, y1, x2, y2)
+
+@dataclass
+class MultimodalFrame:
+    """A synchronized snapshot of all sensory inputs."""
+    timestamp: float
+    speech_text: Optional[str] = None
+    speech_intent: Optional[str] = None
+    speech_slots: Dict = field(default_factory=dict)
+    gesture: Optional[Gesture] = None
+    detected_objects: List[VisualObject] = field(default_factory=list)
+    scene_description: str = ""
+
+class MultimodalFusionEngine:
+    """Fuse speech, vision, and gesture into unified intent."""
+
+    def __init__(self, reference_timeout=3.0):
+        self.reference_timeout = reference_timeout
+        self.recent_frames = []
+        self.max_frames = 60
+
+    def add_frame(self, frame: MultimodalFrame):
+        """Add a new perception frame."""
+        self.recent_frames.append(frame)
+        if len(self.recent_frames) > self.max_frames:
+            self.recent_frames.pop(0)
+
+    def resolve_references(self, frame: MultimodalFrame):
+        """Resolve deictic references like 'that', 'this', 'there'.
+
+        Cross-references speech with pointing gestures and visible objects.
+        """
+        resolved = dict(frame.speech_slots)
+
+        # If speech contains a deictic reference ("that", "this", "it")
+        deictic_words = {"that", "this", "it", "there", "here"}
+        has_deictic = any(
+            word in (frame.speech_text or "").lower().split()
+            for word in deictic_words
+        )
+
+        if has_deictic and frame.gesture and frame.gesture.gesture_type == GestureType.POINTING:
+            # Use pointing direction to identify the referenced object
+            pointed_object = self._find_pointed_object(
+                frame.gesture.direction,
+                frame.detected_objects
+            )
+            if pointed_object:
+                # Replace deictic reference with actual object
+                if "object" in resolved and resolved["object"] in deictic_words:
+                    resolved["object"] = pointed_object.label
+                if "target" not in resolved:
+                    resolved["target"] = pointed_object.label
+                resolved["target_position"] = pointed_object.position_3d.tolist()
+
+        return resolved
+
+    def _find_pointed_object(self, point_direction, objects, max_angle=30.0):
+        """Find the object closest to the pointing direction.
+
+        Parameters
+        ----------
+        point_direction : np.ndarray
+            3D unit vector of pointing direction.
+        objects : list of VisualObject
+            Currently visible objects.
+        max_angle : float
+            Maximum angle (degrees) between point and object to match.
+        """
+        best_object = None
+        best_angle = max_angle
+
+        for obj in objects:
+            # Direction from person to object
+            obj_direction = obj.position_3d / (np.linalg.norm(obj.position_3d) + 1e-8)
+            cos_angle = np.dot(point_direction, obj_direction)
+            angle = np.degrees(np.arccos(np.clip(cos_angle, -1, 1)))
+
+            if angle < best_angle:
+                best_angle = angle
+                best_object = obj
+
+        return best_object
+
+    def build_context_prompt(self, frame: MultimodalFrame):
+        """Build a structured prompt for the multimodal LLM."""
+        resolved_slots = self.resolve_references(frame)
+
+        prompt = f"""You are a helpful humanoid robot assistant. Interpret the following
+multimodal input and determine the intended robot action.
+
+SPEECH: "{frame.speech_text or 'none'}"
+GESTURE: {frame.gesture.gesture_type.value if frame.gesture else 'none'}
+{f'POINTING DIRECTION: {frame.gesture.direction.tolist()}' if frame.gesture and frame.gesture.direction is not None else ''}
+VISIBLE OBJECTS: {[f"{o.label} at {o.position_3d.tolist()}" for o in frame.detected_objects]}
+RESOLVED REFERENCES: {resolved_slots}
+SCENE: {frame.scene_description}
+
+Respond with a JSON action:
+{{"action": "<ACTION_TYPE>", "object": "<target_object>", "location": [x, y, z], "parameters": {{}}}}
+
+Valid actions: PICK, PLACE, NAVIGATE, WAVE_BACK, STOP, ACKNOWLEDGE, ASK_CLARIFICATION
+"""
+        return prompt
+```
+
+---
+
+## Multimodal LLM Integration
+
+Multimodal LLMs can process text, images, and structured data simultaneously to produce grounded robot actions.
+
+```python
+import json
+import base64
+import aiohttp
+import asyncio
+from typing import Dict, Any
+
+class MultimodalLLMPlanner:
+    """Use a multimodal LLM to interpret fused sensory inputs."""
+
+    def __init__(self, api_endpoint, model_name="gpt-4o"):
+        self.api_endpoint = api_endpoint
+        self.model_name = model_name
+        self.conversation_history = []
+        self.max_history = 10
+
+    async def interpret(self, text_prompt, image_rgb=None):
+        """Send multimodal input to the LLM and get an action plan.
+
+        Parameters
+        ----------
+        text_prompt : str
+            Structured prompt with speech, gesture, and object info.
+        image_rgb : np.ndarray, optional
+            RGB image from the robot's camera for visual grounding.
+
+        Returns
+        -------
+        dict : Parsed action with object, location, and parameters.
+        """
+        messages = list(self.conversation_history)
+
+        # Build the message content
+        content = [{"type": "text", "text": text_prompt}]
+
+        if image_rgb is not None:
+            # Encode image as base64 for the API
+            import cv2
+            _, buffer = cv2.imencode('.jpg', image_rgb)
+            image_b64 = base64.b64encode(buffer).decode('utf-8')
+            content.append({
+                "type": "image_url",
+                "image_url": {
+                    "url": f"data:image/jpeg;base64,{image_b64}",
+                    "detail": "low",
+                },
+            })
+
+        messages.append({"role": "user", "content": content})
+
+        # Call the LLM API
+        payload = {
+            "model": self.model_name,
+            "messages": messages,
+            "temperature": 0.1,  # Low temperature for deterministic actions
+            "max_tokens": 256,
+        }
+
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                self.api_endpoint,
+                json=payload,
+                headers={"Content-Type": "application/json"}
+            ) as response:
+                result = await response.json()
+
+        # Parse the response
+        assistant_text = result["choices"][0]["message"]["content"]
+
+        # Update conversation history for context
+        self.conversation_history.append({"role": "user", "content": text_prompt})
+        self.conversation_history.append({"role": "assistant", "content": assistant_text})
+        if len(self.conversation_history) > self.max_history * 2:
+            self.conversation_history = self.conversation_history[-self.max_history * 2:]
+
+        # Extract JSON action from response
+        try:
+            action = json.loads(assistant_text)
+        except json.JSONDecodeError:
+            # Try to find JSON in the response
+            start = assistant_text.find('{')
+            end = assistant_text.rfind('}') + 1
+            if start >= 0 and end > start:
+                action = json.loads(assistant_text[start:end])
+            else:
+                action = {"action": "ASK_CLARIFICATION", "reason": "Could not parse response"}
+
+        return action
+```
+
+---
+
+## Complete ROS 2 Multimodal Node
+
+```python
+import rclpy
+from rclpy.node import Node
+from sensor_msgs.msg import Image
+from std_msgs.msg import String
+from geometry_msgs.msg import PoseStamped
+from cv_bridge import CvBridge
+import json
+import numpy as np
+import asyncio
+
+class MultimodalInteractionNode(Node):
+    """ROS 2 node combining vision, speech, and gesture for robot control."""
+
+    def __init__(self):
+        super().__init__('multimodal_interaction')
+        self.bridge = CvBridge()
+
+        # Subscribers
+        self.image_sub = self.create_subscription(
+            Image, '/camera/image_raw', self.on_image, 10
+        )
+        self.speech_sub = self.create_subscription(
+            String, '/speech/transcription', self.on_speech, 10
+        )
+        self.gesture_sub = self.create_subscription(
+            String, '/gesture/detected', self.on_gesture, 10
+        )
+        self.objects_sub = self.create_subscription(
+            String, '/vision/detected_objects', self.on_objects, 10
+        )
+
+        # Publishers
+        self.action_pub = self.create_publisher(String, '/robot/action_command', 10)
+        self.response_pub = self.create_publisher(String, '/robot/speech_response', 10)
+
+        # State
+        self.latest_image = None
+        self.latest_speech = None
+        self.latest_gesture = None
+        self.latest_objects = []
+        self.fusion = MultimodalFusionEngine()
+        self.pending_interaction = False
+
+        # Process at 5 Hz
+        self.timer = self.create_timer(0.2, self.process_interaction)
+        self.get_logger().info("Multimodal interaction node initialized")
+
+    def on_image(self, msg):
+        self.latest_image = self.bridge.imgmsg_to_cv2(msg, 'bgr8')
+
+    def on_speech(self, msg):
+        self.latest_speech = msg.data
+        self.pending_interaction = True
+        self.get_logger().info(f'Speech received: "{msg.data}"')
+
+    def on_gesture(self, msg):
+        gesture_data = json.loads(msg.data)
+        self.latest_gesture = Gesture(
+            gesture_type=GestureType(gesture_data["type"]),
+            confidence=gesture_data["confidence"],
+            direction=np.array(gesture_data["direction"]) if gesture_data.get("direction") else None,
+            hand=gesture_data.get("hand", "right"),
+        )
+
+    def on_objects(self, msg):
+        objects_data = json.loads(msg.data)
+        self.latest_objects = [
+            VisualObject(
+                label=o["label"],
+                position_3d=np.array(o["position"]),
+                confidence=o["confidence"],
+                bounding_box=tuple(o["bbox"]),
+            )
+            for o in objects_data
+        ]
+
+    def process_interaction(self):
+        """Main processing loop: fuse inputs and generate actions."""
+        if not self.pending_interaction:
+            return
+        self.pending_interaction = False
+
+        # Build a multimodal frame
+        frame = MultimodalFrame(
+            timestamp=self.get_clock().now().nanoseconds / 1e9,
+            speech_text=self.latest_speech,
+            gesture=self.latest_gesture,
+            detected_objects=self.latest_objects,
+            scene_description=f"{len(self.latest_objects)} objects visible",
+        )
+
+        # Fuse and resolve references
+        self.fusion.add_frame(frame)
+        prompt = self.fusion.build_context_prompt(frame)
+
+        self.get_logger().info("Processing multimodal input...")
+
+        # In production, this would call the async LLM
+        # For synchronous ROS processing, use a simplified approach:
+        action = self._local_intent_resolution(frame)
+
+        # Publish the action
+        action_msg = String()
+        action_msg.data = json.dumps(action)
+        self.action_pub.publish(action_msg)
+
+        # Generate spoken response
+        response = self._generate_response(action)
+        response_msg = String()
+        response_msg.data = response
+        self.response_pub.publish(response_msg)
+
+        self.get_logger().info(f"Action: {action['action']}, Response: {response}")
+
+        # Clear consumed inputs
+        self.latest_speech = None
+        self.latest_gesture = None
+
+    def _local_intent_resolution(self, frame):
+        """Resolve intent locally when LLM is not available."""
+        text = (frame.speech_text or "").lower()
+
+        if "pick" in text or "grab" in text or "get" in text:
+            resolved = self.fusion.resolve_references(frame)
+            target = resolved.get("target", resolved.get("object", "unknown"))
+            position = resolved.get("target_position", [0.5, 0.0, 0.4])
+            return {"action": "PICK", "object": target, "location": position}
+
+        elif "put" in text or "place" in text:
+            resolved = self.fusion.resolve_references(frame)
+            return {"action": "PLACE", "object": resolved.get("object", "held_object"),
+                    "location": resolved.get("target_position", [0.5, 0.3, 0.4])}
+
+        elif "stop" in text or (frame.gesture and
+              frame.gesture.gesture_type == GestureType.STOP):
+            return {"action": "STOP", "object": None, "location": None}
+
+        elif "come" in text or "here" in text:
+            return {"action": "NAVIGATE", "object": None,
+                    "location": [0.0, 0.0, 0.0]}
+
+        else:
+            return {"action": "ACKNOWLEDGE", "object": None, "location": None}
+
+    def _generate_response(self, action):
+        """Generate a natural language response for the action."""
+        responses = {
+            "PICK": f"I will pick up the {action.get('object', 'object')}.",
+            "PLACE": f"Placing the {action.get('object', 'object')} at the target location.",
+            "NAVIGATE": "On my way.",
+            "STOP": "Stopping all motion.",
+            "ACKNOWLEDGE": "I understand.",
+            "ASK_CLARIFICATION": "Could you point to the object you mean?",
+        }
+        return responses.get(action["action"], "I am not sure what to do.")
+
+
+def main():
+    rclpy.init()
+    node = MultimodalInteractionNode()
+    rclpy.spin(node)
+    rclpy.shutdown()
+
+if __name__ == '__main__':
+    main()
+```
+
+---
+
+## Performance Considerations
+
+| Component | Typical Latency | Target for HRI | Optimization |
+|-----------|----------------|-----------------|--------------|
+| Speech recognition | 500-2000ms | < 1000ms | Streaming ASR, local models |
+| Object detection | 50-200ms | < 100ms | TensorRT, INT8 quantization |
+| Gesture recognition | 100-300ms | < 150ms | MediaPipe on-device |
+| LLM inference | 500-3000ms | < 1500ms | Local models (Llama), caching |
+| Multimodal fusion | 5-20ms | < 20ms | Pre-allocated buffers |
+| **Total pipeline** | **1200-5500ms** | **< 2000ms** | Parallel processing, edge AI |
+
+---
+
+## Summary
+
+| Concept | Key Takeaway |
+|---------|-------------|
+| **Multimodal fusion** | Combining vision, speech, and gesture resolves ambiguity that no single modality can handle |
+| **Gesture recognition** | Pose estimation + rule-based classification detects pointing, waving, and stop gestures |
+| **Reference resolution** | Deictic words ("that", "there") are resolved by cross-referencing speech with pointing and visible objects |
+| **Multimodal LLMs** | Accept text + images simultaneously for grounded action planning |
+| **ROS 2 integration** | Subscribe to perception topics, fuse in a central node, publish actions and responses |
+| **Latency budget** | Total pipeline must stay under 2 seconds for natural human-robot interaction |
+
+## Exercises
+
+1. **Gesture Classifier**: Implement the gesture recognizer using MediaPipe body pose estimation. Test with pointing, waving, and stop gestures and report classification accuracy.
+
+2. **Reference Resolution**: Create a test scene with 5 labeled objects. Simulate speech commands with deictic references ("pick up that", "move this there") combined with pointing directions. Verify that the fusion engine correctly identifies the target objects.
+
+3. **Multimodal LLM Evaluation**: Compare action outputs from a multimodal LLM when given (a) text only, (b) text + image, (c) text + image + gesture context. Measure accuracy improvement with each additional modality.
+
+4. **Latency Profiling**: Measure the end-to-end latency of the multimodal pipeline from speech onset to action publication. Identify the bottleneck and propose optimizations.
+
+5. **Conversational Context**: Extend the interaction node to maintain a 5-turn conversation history. Test multi-turn commands like "Pick up the cup. No, the other one. Now bring it here."
+
+## Next Steps
+
+Continue to the [Capstone Project](/capstone-project/) to integrate everything you have learned -- locomotion, manipulation, perception, and conversation -- into a complete humanoid robot system.

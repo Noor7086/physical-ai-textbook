@@ -1,0 +1,383 @@
+---
+sidebar_position: 2
+title: "Nodes, Topics, and Services"
+description: "Understanding ROS 2 communication patterns: nodes, topics, and services"
+---
+
+# Nodes, Topics, and Services
+
+This chapter covers the fundamental building blocks of ROS 2 communication: nodes, topics, and services.
+
+## Nodes
+
+A **node** is a process that performs computation. Nodes are the basic unit of software organization in ROS 2.
+
+### Creating a Basic Node
+
+```python
+#!/usr/bin/env python3
+import rclpy
+from rclpy.node import Node
+
+class MyRobotNode(Node):
+    def __init__(self):
+        # Initialize the node with a name
+        super().__init__('my_robot_node')
+        
+        # Log a message
+        self.get_logger().info('Robot node has started!')
+        
+        # Create a timer that calls a function every second
+        self.timer = self.create_timer(1.0, self.timer_callback)
+        self.counter = 0
+    
+    def timer_callback(self):
+        self.counter += 1
+        self.get_logger().info(f'Timer tick: {self.counter}')
+
+def main(args=None):
+    # Initialize ROS 2
+    rclpy.init(args=args)
+    
+    # Create node instance
+    node = MyRobotNode()
+    
+    # Keep node running
+    rclpy.spin(node)
+    
+    # Cleanup
+    node.destroy_node()
+    rclpy.shutdown()
+
+if __name__ == '__main__':
+    main()
+```
+
+### Node Lifecycle
+
+```
+┌─────────────┐     ┌─────────────┐     ┌─────────────┐
+│   Created   │────▶│   Running   │────▶│  Destroyed  │
+└─────────────┘     └─────────────┘     └─────────────┘
+                          │
+                          │ spin()
+                          ▼
+                    ┌─────────────┐
+                    │  Callbacks  │
+                    │  executing  │
+                    └─────────────┘
+```
+
+## Topics
+
+**Topics** are named buses that nodes use to exchange messages using a publish/subscribe pattern.
+
+### Publisher Example
+
+```python
+#!/usr/bin/env python3
+import rclpy
+from rclpy.node import Node
+from geometry_msgs.msg import Twist
+
+class VelocityPublisher(Node):
+    def __init__(self):
+        super().__init__('velocity_publisher')
+        
+        # Create publisher
+        # Arguments: message type, topic name, queue size
+        self.publisher = self.create_publisher(
+            Twist,           # Message type
+            '/cmd_vel',      # Topic name
+            10               # Queue size
+        )
+        
+        # Timer to publish periodically
+        self.timer = self.create_timer(0.1, self.publish_velocity)
+        
+    def publish_velocity(self):
+        msg = Twist()
+        msg.linear.x = 0.5   # Move forward at 0.5 m/s
+        msg.angular.z = 0.1  # Rotate at 0.1 rad/s
+        
+        self.publisher.publish(msg)
+        self.get_logger().info(f'Publishing: linear={msg.linear.x}, angular={msg.angular.z}')
+
+def main(args=None):
+    rclpy.init(args=args)
+    node = VelocityPublisher()
+    rclpy.spin(node)
+    node.destroy_node()
+    rclpy.shutdown()
+
+if __name__ == '__main__':
+    main()
+```
+
+### Subscriber Example
+
+```python
+#!/usr/bin/env python3
+import rclpy
+from rclpy.node import Node
+from sensor_msgs.msg import Imu
+
+class ImuSubscriber(Node):
+    def __init__(self):
+        super().__init__('imu_subscriber')
+        
+        # Create subscription
+        self.subscription = self.create_subscription(
+            Imu,                    # Message type
+            '/imu/data',            # Topic name
+            self.imu_callback,      # Callback function
+            10                      # Queue size
+        )
+        
+    def imu_callback(self, msg):
+        # Extract orientation (quaternion)
+        orientation = msg.orientation
+        
+        # Extract angular velocity
+        angular_vel = msg.angular_velocity
+        
+        # Extract linear acceleration
+        linear_accel = msg.linear_acceleration
+        
+        self.get_logger().info(
+            f'IMU: orientation=({orientation.x:.2f}, {orientation.y:.2f}, '
+            f'{orientation.z:.2f}, {orientation.w:.2f})'
+        )
+
+def main(args=None):
+    rclpy.init(args=args)
+    node = ImuSubscriber()
+    rclpy.spin(node)
+    node.destroy_node()
+    rclpy.shutdown()
+
+if __name__ == '__main__':
+    main()
+```
+
+### Topic Communication Pattern
+
+```
+┌──────────────┐                    ┌──────────────┐
+│  Publisher   │                    │  Subscriber  │
+│    Node      │                    │    Node      │
+└──────┬───────┘                    └──────┬───────┘
+       │                                   │
+       │  publish(msg)                     │
+       ▼                                   │
+┌─────────────────────────────────────────────────┐
+│              Topic: /sensor_data                 │
+│         ◀─────────────────────────▶             │
+└─────────────────────────────────────────────────┘
+                                           │
+                                           │ callback(msg)
+                                           ▼
+                                   ┌──────────────┐
+                                   │   Process    │
+                                   │   Message    │
+                                   └──────────────┘
+```
+
+## Services
+
+**Services** implement a request/response pattern for synchronous communication.
+
+### Service Definition
+
+Services are defined in `.srv` files:
+
+```
+# Example: SetJointAngle.srv
+# Request
+string joint_name
+float64 angle
+---
+# Response
+bool success
+string message
+```
+
+### Service Server
+
+```python
+#!/usr/bin/env python3
+import rclpy
+from rclpy.node import Node
+from example_interfaces.srv import SetBool
+
+class GripperService(Node):
+    def __init__(self):
+        super().__init__('gripper_service')
+        
+        # Create service
+        self.service = self.create_service(
+            SetBool,                    # Service type
+            '/gripper/activate',        # Service name
+            self.activate_gripper       # Callback
+        )
+        
+        self.gripper_active = False
+        self.get_logger().info('Gripper service ready')
+        
+    def activate_gripper(self, request, response):
+        self.gripper_active = request.data
+        
+        if request.data:
+            self.get_logger().info('Gripper ACTIVATED')
+            response.success = True
+            response.message = 'Gripper is now active'
+        else:
+            self.get_logger().info('Gripper DEACTIVATED')
+            response.success = True
+            response.message = 'Gripper is now inactive'
+            
+        return response
+
+def main(args=None):
+    rclpy.init(args=args)
+    node = GripperService()
+    rclpy.spin(node)
+    node.destroy_node()
+    rclpy.shutdown()
+
+if __name__ == '__main__':
+    main()
+```
+
+### Service Client
+
+```python
+#!/usr/bin/env python3
+import rclpy
+from rclpy.node import Node
+from example_interfaces.srv import SetBool
+
+class GripperClient(Node):
+    def __init__(self):
+        super().__init__('gripper_client')
+        
+        # Create client
+        self.client = self.create_client(
+            SetBool,
+            '/gripper/activate'
+        )
+        
+        # Wait for service to be available
+        while not self.client.wait_for_service(timeout_sec=1.0):
+            self.get_logger().info('Waiting for gripper service...')
+    
+    def send_request(self, activate: bool):
+        request = SetBool.Request()
+        request.data = activate
+        
+        # Call service asynchronously
+        future = self.client.call_async(request)
+        
+        # Wait for response
+        rclpy.spin_until_future_complete(self, future)
+        
+        return future.result()
+
+def main(args=None):
+    rclpy.init(args=args)
+    client = GripperClient()
+    
+    # Activate gripper
+    response = client.send_request(True)
+    print(f'Result: {response.success}, Message: {response.message}')
+    
+    client.destroy_node()
+    rclpy.shutdown()
+
+if __name__ == '__main__':
+    main()
+```
+
+## Common Message Types
+
+| Message Type | Package | Use Case |
+|-------------|---------|----------|
+| `Twist` | geometry_msgs | Velocity commands |
+| `Pose` | geometry_msgs | Position and orientation |
+| `Imu` | sensor_msgs | IMU data |
+| `Image` | sensor_msgs | Camera images |
+| `LaserScan` | sensor_msgs | 2D LiDAR data |
+| `PointCloud2` | sensor_msgs | 3D point clouds |
+| `JointState` | sensor_msgs | Joint positions/velocities |
+
+## Quality of Service (QoS)
+
+QoS settings control message delivery reliability:
+
+```python
+from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
+
+# Reliable delivery (for critical data)
+reliable_qos = QoSProfile(
+    reliability=ReliabilityPolicy.RELIABLE,
+    history=HistoryPolicy.KEEP_LAST,
+    depth=10
+)
+
+# Best effort (for sensor data)
+sensor_qos = QoSProfile(
+    reliability=ReliabilityPolicy.BEST_EFFORT,
+    history=HistoryPolicy.KEEP_LAST,
+    depth=1
+)
+
+# Use in publisher/subscriber
+self.publisher = self.create_publisher(Twist, '/cmd_vel', reliable_qos)
+```
+
+## CLI Tools
+
+Useful commands for debugging:
+
+```bash
+# List all nodes
+ros2 node list
+
+# Get node info
+ros2 node info /my_robot_node
+
+# List all topics
+ros2 topic list
+
+# Echo topic messages
+ros2 topic echo /cmd_vel
+
+# Publish to topic
+ros2 topic pub /cmd_vel geometry_msgs/msg/Twist "{linear: {x: 0.5}}"
+
+# List services
+ros2 service list
+
+# Call service
+ros2 service call /gripper/activate std_srvs/srv/SetBool "{data: true}"
+```
+
+## Summary
+
+| Concept | Pattern | Use Case |
+|---------|---------|----------|
+| **Node** | Process | Computation unit |
+| **Topic** | Pub/Sub | Streaming data |
+| **Service** | Request/Response | Synchronous calls |
+
+## Exercises
+
+1. Create a node that subscribes to `/cmd_vel` and logs the received velocities.
+
+2. Implement a service that returns the current battery level of a robot.
+
+3. Create a publisher that sends simulated IMU data at 100 Hz.
+
+## Next Steps
+
+Continue to [Python Packages](./python-packages) to learn how to organize your ROS 2 code into reusable packages.

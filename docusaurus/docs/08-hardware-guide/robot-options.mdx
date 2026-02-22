@@ -1,0 +1,686 @@
+---
+sidebar_position: 4
+title: "Robot Platform Options"
+description: "Choosing the right robot platform for physical AI learning, from simulation-only setups to humanoid systems"
+---
+
+# Robot Platform Options
+
+Choosing a robot platform is one of the most consequential decisions in your physical AI journey. The right platform accelerates learning; the wrong one creates frustration and wasted budget. This chapter surveys every category of platform available today and gives you a framework for making the right choice.
+
+## Learning Objectives
+
+By the end of this chapter, you will be able to:
+
+1. **Evaluate** the tradeoffs between simulation-only, wheeled, manipulator, and humanoid platforms
+2. **Set up** Gazebo and Isaac Sim for simulation-only development
+3. **Select** an affordable physical robot kit that matches your learning goals
+4. **Understand** the landscape of humanoid robot platforms
+5. **Build** a simple DIY robot with Arduino and servos for hands-on learning
+6. **Map** your goals to a specific platform recommendation
+
+## Platform Categories at a Glance
+
+```
+┌──────────────────────────────────────────────────────────────────────┐
+│                Robot Platform Spectrum                               │
+├──────────────────────────────────────────────────────────────────────┤
+│                                                                      │
+│  Cost:     $0              $1K           $5K          $16K+          │
+│            │               │             │            │              │
+│            ▼               ▼             ▼            ▼              │
+│  ┌─────────────┐  ┌──────────────┐  ┌─────────┐  ┌──────────┐      │
+│  │ Simulation  │  │  Wheeled /   │  │  Arm +  │  │ Humanoid │      │
+│  │   Only      │  │  Mobile Base │  │ Mobile  │  │          │      │
+│  └─────────────┘  └──────────────┘  └─────────┘  └──────────┘      │
+│                                                                      │
+│  Skills:  Perception       Navigation    Manip.     Locomotion       │
+│           Planning         SLAM          Grasping   Whole-body       │
+│           RL basics        Obstacle      Force      Balance          │
+│                            avoidance     control    Dexterity        │
+│                                                                      │
+│  Complexity: Low ──────────────────────────────────────────▶ High    │
+└──────────────────────────────────────────────────────────────────────┘
+```
+
+## Option 1: Simulation Only
+
+Simulation is not a compromise -- it is the primary development environment for physical AI. Every major robotics lab develops and tests in simulation before touching real hardware. For learners, simulation offers zero risk, instant reset, and access to robots you cannot afford.
+
+### Gazebo (Open Source, Free)
+
+Gazebo (now "Gazebo Harmonic," successor to Gazebo Classic) is the standard open-source robotics simulator with tight ROS 2 integration.
+
+**Strengths:**
+- Native ROS 2 integration via `ros_gz` bridge
+- Rich library of robot models (TurtleBot, UR5, Franka, humanoids)
+- Physics engines: DART, Bullet, ODE
+- Runs on CPU (no GPU required for basic scenes)
+- Large community and extensive documentation
+
+**Limitations:**
+- Visual fidelity lower than Isaac Sim
+- Limited domain randomization support
+- No ray-tracing for photorealistic rendering
+
+```bash
+# Install Gazebo Harmonic on Ubuntu 22.04
+sudo apt install -y ros-humble-ros-gz
+
+# Launch a demo world with TurtleBot 4
+ros2 launch turtlebot4_gz_bringup turtlebot4_gz.launch.py \
+    world:=warehouse
+
+# In another terminal, send velocity commands
+ros2 topic pub /cmd_vel geometry_msgs/msg/Twist \
+    "{linear: {x: 0.3}, angular: {z: 0.2}}"
+```
+
+### NVIDIA Isaac Sim (Free for Individual Use)
+
+Isaac Sim is NVIDIA's GPU-accelerated simulator built on Omniverse. It is the gold standard for sim-to-real transfer and reinforcement learning.
+
+**Strengths:**
+- Photorealistic rendering via RTX ray tracing
+- GPU-accelerated physics (PhysX 5)
+- Domain randomization for sim-to-real transfer
+- Parallel environment training (thousands simultaneously)
+- Built-in support for Isaac Lab (RL framework)
+
+**Limitations:**
+- Requires NVIDIA RTX GPU (minimum RTX 3070, 8 GB VRAM)
+- Large install footprint (~30 GB)
+- Steeper learning curve than Gazebo
+
+```bash
+# Install Isaac Sim via NVIDIA Omniverse Launcher
+# Download from: https://developer.nvidia.com/isaac-sim
+
+# After installation, launch from terminal
+cd ~/.local/share/ov/pkg/isaac-sim-4.0.0
+./isaac-sim.sh
+
+# Or launch headless for RL training
+./isaac-sim.sh --headless
+```
+
+### Simulation Comparison Table
+
+| Feature | Gazebo Harmonic | Isaac Sim |
+|---------|----------------|-----------|
+| **Cost** | Free (open source) | Free (individual) |
+| **GPU Required** | No (basic) | Yes (RTX) |
+| **ROS 2 Integration** | Native bridge | Bridge + standalone |
+| **Visual Quality** | Good | Photorealistic |
+| **Physics Engine** | DART/Bullet/ODE | PhysX 5 (GPU) |
+| **Domain Randomization** | Limited | Extensive |
+| **Parallel Environments** | Single | Thousands (GPU) |
+| **Sim-to-Real Gap** | Moderate | Small |
+| **Best For** | Learning ROS 2, basic sim | RL training, sim-to-real |
+
+### When Simulation Is Enough
+
+You should stay simulation-only if:
+- You are in your first 3-6 months of robotics learning
+- Your focus is perception, planning, or RL algorithm development
+- You do not have physical space for a robot
+- Your budget is under $1,000 total
+
+## Option 2: Affordable Robot Kits
+
+When you are ready for real hardware, these platforms offer the best learning-to-cost ratio.
+
+### TurtleBot 4 / TurtleBot 4 Lite
+
+The TurtleBot 4 is the reference platform for ROS 2 learning. Built on the iRobot Create 3 base with an onboard Raspberry Pi 4.
+
+| Spec | TurtleBot 4 Lite | TurtleBot 4 |
+|------|------------------|-------------|
+| **Base** | iRobot Create 3 | iRobot Create 3 |
+| **Computer** | Raspberry Pi 4 (4 GB) | Raspberry Pi 4 (4 GB) |
+| **LiDAR** | RPLIDAR A1 (2D) | RPLIDAR A1 (2D) |
+| **Camera** | OAK-D Lite | OAK-D Pro |
+| **IMU** | Create 3 built-in | Create 3 built-in |
+| **Battery** | 26 Wh (Create 3) | 26 Wh (Create 3) |
+| **Price** | ~$1,100 | ~$1,900 |
+| **Best For** | SLAM, navigation | Perception + navigation |
+
+```bash
+# TurtleBot 4 bringup (on the robot's Raspberry Pi)
+ros2 launch turtlebot4_bringup standard.launch.py
+
+# On your workstation: visualize in RViz
+ros2 launch turtlebot4_viz view_robot.launch.py
+
+# Run SLAM
+ros2 launch turtlebot4_navigation slam.launch.py
+
+# Navigate autonomously
+ros2 launch turtlebot4_navigation nav2.launch.py \
+    map:=/path/to/map.yaml
+```
+
+**Skills you learn:** SLAM, autonomous navigation, obstacle avoidance, sensor fusion, ROS 2 Nav2 stack.
+
+### ROBOTIS Open Manipulator-X
+
+A 4-DOF robotic arm designed for ROS 2 education. Uses Dynamixel smart servos with position, velocity, and current feedback.
+
+| Spec | Details |
+|------|---------|
+| **DOF** | 4 (+ gripper) |
+| **Reach** | 380 mm |
+| **Payload** | 500 g |
+| **Servos** | Dynamixel XM430-W350 |
+| **Interface** | USB (U2D2) |
+| **ROS 2 Support** | Full (MoveIt 2) |
+| **Price** | ~$550 |
+
+```bash
+# Install Open Manipulator packages
+sudo apt install -y \
+    ros-humble-open-manipulator-x \
+    ros-humble-moveit
+
+# Launch the arm controller
+ros2 launch open_manipulator_x_controller \
+    open_manipulator_x_controller.launch.py
+
+# Plan and execute a motion with MoveIt
+ros2 launch open_manipulator_x_moveit_config \
+    demo.launch.py
+```
+
+```python
+#!/usr/bin/env python3
+"""pick_and_place.py -- Simple pick-and-place with Open Manipulator-X."""
+import rclpy
+from rclpy.node import Node
+from open_manipulator_msgs.srv import SetJointPosition, SetKinematicsPose
+import time
+
+class PickAndPlace(Node):
+    def __init__(self):
+        super().__init__('pick_and_place')
+
+        self.joint_client = self.create_client(
+            SetJointPosition, '/goal_joint_space_path'
+        )
+        self.task_client = self.create_client(
+            SetKinematicsPose, '/goal_task_space_path'
+        )
+
+        self.joint_client.wait_for_service()
+        self.task_client.wait_for_service()
+        self.get_logger().info("Connected to manipulator services")
+
+    def move_to_home(self):
+        """Move all joints to home position."""
+        req = SetJointPosition.Request()
+        req.joint_position.joint_name = [
+            'joint1', 'joint2', 'joint3', 'joint4'
+        ]
+        req.joint_position.position = [0.0, -1.05, 0.35, 0.70]
+        req.path_time = 2.0
+        future = self.joint_client.call_async(req)
+        rclpy.spin_until_future_complete(self, future)
+        self.get_logger().info("Moved to home position")
+
+    def move_to_pose(self, x, y, z, path_time=2.0):
+        """Move end effector to a Cartesian pose."""
+        req = SetKinematicsPose.Request()
+        req.kinematics_pose.pose.position.x = x
+        req.kinematics_pose.pose.position.y = y
+        req.kinematics_pose.pose.position.z = z
+        req.path_time = path_time
+        future = self.task_client.call_async(req)
+        rclpy.spin_until_future_complete(self, future)
+        self.get_logger().info(f"Moved to ({x:.3f}, {y:.3f}, {z:.3f})")
+
+def main(args=None):
+    rclpy.init(args=args)
+    node = PickAndPlace()
+
+    # Home -> Pick -> Lift -> Place -> Home
+    node.move_to_home()
+    time.sleep(2)
+    node.move_to_pose(0.20, 0.0, 0.05)   # Approach pick position
+    time.sleep(1)
+    # Gripper close would go here
+    node.move_to_pose(0.20, 0.0, 0.15)   # Lift
+    time.sleep(1)
+    node.move_to_pose(0.0, 0.20, 0.15)   # Move to place
+    time.sleep(1)
+    node.move_to_pose(0.0, 0.20, 0.05)   # Lower
+    time.sleep(1)
+    # Gripper open would go here
+    node.move_to_home()
+
+    node.destroy_node()
+    rclpy.shutdown()
+
+if __name__ == '__main__':
+    main()
+```
+
+**Skills you learn:** Forward/inverse kinematics, motion planning (MoveIt 2), grasping, task-space control.
+
+### Combined: Mobile Manipulator
+
+Mount the Open Manipulator-X on a TurtleBot 4 to create a mobile manipulator -- the configuration most similar to a humanoid's upper body.
+
+```
+┌──────────────────────────────────────────┐
+│       Mobile Manipulator Setup           │
+├──────────────────────────────────────────┤
+│                                          │
+│         ┌─────────────────┐              │
+│         │  Open Manip-X   │              │
+│         │   (4-DOF arm)   │              │
+│         │    ┌─────┐      │              │
+│         │    │Grip │      │              │
+│         └──┬─┴─────┴──────┘              │
+│            │                             │
+│     ┌──────┴──────────────────┐          │
+│     │    TurtleBot 4 Base     │          │
+│     │   ┌─────┐    ┌─────┐   │          │
+│     │   │LiDAR│    │OAK-D│   │          │
+│     │   └─────┘    └─────┘   │          │
+│     │  ┌──┐            ┌──┐  │          │
+│     │  │  │            │  │  │          │
+│     │  └──┘            └──┘  │          │
+│     └─────────────────────────┘          │
+│     Cost: ~$1,600 - $2,500               │
+│                                          │
+└──────────────────────────────────────────┘
+```
+
+## Option 3: Humanoid Platforms
+
+Humanoid robots are the ultimate target platform for physical AI. They are also the most expensive and complex to work with.
+
+### Unitree G1
+
+The Unitree G1 is the most accessible humanoid robot for developers and researchers.
+
+| Spec | Details |
+|------|---------|
+| **Height** | 127 cm |
+| **Weight** | 35 kg |
+| **DOF** | 23 (base) / 43 (dexterous hands) |
+| **Compute** | NVIDIA Jetson Orin NX |
+| **Cameras** | Intel RealSense D435i (stereo depth) |
+| **LiDAR** | Unitree L1 3D LiDAR |
+| **Battery** | ~1-2 hours active |
+| **Max Speed** | 2 m/s walking |
+| **SDK** | Unitree SDK 2 (ROS 2 compatible) |
+| **Price** | ~$16,000 (edu pricing) |
+
+### Unitree H1
+
+The larger, more capable sibling of the G1.
+
+| Spec | Details |
+|------|---------|
+| **Height** | 180 cm |
+| **Weight** | 47 kg |
+| **DOF** | 19 |
+| **Max Speed** | 3.3 m/s (walking), 5+ m/s (running) |
+| **Payload** | 30 kg |
+| **Price** | ~$90,000+ |
+
+### Figure 02
+
+Figure AI's humanoid, designed for commercial deployment in logistics and manufacturing. Not available for individual purchase but notable for its architecture.
+
+| Spec | Details |
+|------|---------|
+| **Height** | 170 cm |
+| **Weight** | 60 kg |
+| **DOF** | 40+ |
+| **Hands** | 16-DOF dexterous hands |
+| **Compute** | Custom + cloud |
+| **Notable** | Vision-language-action model integration |
+| **Availability** | Commercial partnerships only |
+
+### Boston Dynamics Atlas (Electric)
+
+The electric Atlas represents the state of the art in dynamic humanoid locomotion.
+
+| Spec | Details |
+|------|---------|
+| **Height** | 150 cm |
+| **Weight** | ~89 kg |
+| **DOF** | 28+ |
+| **Notable** | Continuous rotation joints, extreme agility |
+| **Availability** | Select partners only |
+
+### Humanoid Platform Comparison
+
+| Platform | DOF | Height | ROS 2 | Price | Availability |
+|----------|-----|--------|-------|-------|-------------|
+| Unitree G1 | 23-43 | 127 cm | Yes | $16K | Open purchase |
+| Unitree H1 | 19 | 180 cm | Yes | $90K+ | Open purchase |
+| Figure 02 | 40+ | 170 cm | No | N/A | Partnerships |
+| Atlas (Electric) | 28+ | 150 cm | No | N/A | Select partners |
+| Agility Digit | 16+ | 175 cm | Yes | ~$250K | Commercial |
+
+## Option 4: DIY Builds
+
+Building your own robot teaches hardware-software integration from the ground up. Start simple and incrementally add complexity.
+
+### Servo-Based Mini Humanoid (Arduino)
+
+A tabletop humanoid torso with 6-8 servos teaches the fundamentals of joint control.
+
+**Bill of Materials:**
+
+| Component | Quantity | Unit Cost | Total |
+|-----------|----------|-----------|-------|
+| Arduino Mega 2560 | 1 | $15 | $15 |
+| PCA9685 PWM driver | 1 | $5 | $5 |
+| MG996R servos | 8 | $5 | $40 |
+| 5V 10A power supply | 1 | $12 | $12 |
+| 3D-printed frame | 1 | ~$20 | $20 |
+| Jumper wires, screws | - | ~$10 | $10 |
+| **Total** | | | **~$102** |
+
+```python
+#!/usr/bin/env python3
+"""servo_controller.py -- Control servos via Arduino + PCA9685 from Python."""
+import serial
+import time
+import struct
+
+class ServoController:
+    """Communicate with Arduino running servo firmware over serial."""
+
+    def __init__(self, port='/dev/ttyUSB0', baud=115200):
+        self.serial = serial.Serial(port, baud, timeout=1)
+        time.sleep(2)  # Wait for Arduino reset
+
+    def set_angle(self, channel: int, angle: float):
+        """Set a servo to a specific angle (0-180 degrees)."""
+        pulse = int(150 + (angle / 180.0) * 450)  # Map to PCA9685 range
+        command = f"S{channel},{pulse}\n"
+        self.serial.write(command.encode())
+
+    def set_multiple(self, angles: dict):
+        """Set multiple servos simultaneously.
+
+        Args:
+            angles: Dict mapping channel number to angle in degrees.
+        """
+        for channel, angle in angles.items():
+            self.set_angle(channel, angle)
+            time.sleep(0.01)  # Small delay between commands
+
+    def wave_gesture(self):
+        """Execute a simple wave gesture with the right arm."""
+        # Shoulder (ch 0), elbow (ch 1), wrist (ch 2)
+        keyframes = [
+            {0: 90, 1: 90, 2: 90},    # Neutral
+            {0: 45, 1: 90, 2: 90},    # Raise shoulder
+            {0: 45, 1: 45, 2: 90},    # Bend elbow
+            {0: 45, 1: 45, 2: 60},    # Wave right
+            {0: 45, 1: 45, 2: 120},   # Wave left
+            {0: 45, 1: 45, 2: 60},    # Wave right
+            {0: 45, 1: 45, 2: 120},   # Wave left
+            {0: 90, 1: 90, 2: 90},    # Return to neutral
+        ]
+        for frame in keyframes:
+            self.set_multiple(frame)
+            time.sleep(0.5)
+
+if __name__ == '__main__':
+    ctrl = ServoController('/dev/ttyUSB0')
+    ctrl.wave_gesture()
+```
+
+### ROS 2 Bridge for DIY Robot
+
+Connect your Arduino-based robot to ROS 2 using `micro-ROS` or a serial bridge:
+
+```python
+#!/usr/bin/env python3
+"""arduino_ros_bridge.py -- Bridge between Arduino servo robot and ROS 2."""
+import rclpy
+from rclpy.node import Node
+from sensor_msgs.msg import JointState
+from std_msgs.msg import Float64MultiArray
+import serial
+import math
+
+class ArduinoBridge(Node):
+    def __init__(self):
+        super().__init__('arduino_bridge')
+
+        self.serial = serial.Serial('/dev/ttyUSB0', 115200, timeout=0.1)
+
+        # Joint names matching your URDF
+        self.joint_names = [
+            'right_shoulder_pitch',
+            'right_shoulder_roll',
+            'right_elbow',
+            'left_shoulder_pitch',
+            'left_shoulder_roll',
+            'left_elbow',
+            'head_pan',
+            'head_tilt',
+        ]
+
+        # Subscribe to joint commands
+        self.subscription = self.create_subscription(
+            Float64MultiArray,
+            '/joint_commands',
+            self.joint_command_callback,
+            10
+        )
+
+        # Publish joint states (feedback)
+        self.joint_state_pub = self.create_publisher(
+            JointState, '/joint_states', 10
+        )
+
+        self.timer = self.create_timer(0.05, self.read_feedback)  # 20 Hz
+        self.get_logger().info("Arduino bridge started")
+
+    def joint_command_callback(self, msg):
+        """Convert ROS 2 joint angles (radians) to servo commands."""
+        for i, angle_rad in enumerate(msg.data):
+            angle_deg = math.degrees(angle_rad) + 90  # Center at 90
+            angle_deg = max(0, min(180, angle_deg))
+            command = f"S{i},{int(angle_deg)}\n"
+            self.serial.write(command.encode())
+
+    def read_feedback(self):
+        """Read servo positions and publish as JointState."""
+        self.serial.write(b"R\n")  # Request positions
+        line = self.serial.readline().decode().strip()
+        if not line:
+            return
+
+        try:
+            positions = [float(x) for x in line.split(',')]
+            msg = JointState()
+            msg.header.stamp = self.get_clock().now().to_msg()
+            msg.name = self.joint_names[:len(positions)]
+            msg.position = [
+                math.radians(p - 90) for p in positions
+            ]
+            self.joint_state_pub.publish(msg)
+        except (ValueError, IndexError):
+            pass
+
+def main(args=None):
+    rclpy.init(args=args)
+    node = ArduinoBridge()
+    rclpy.spin(node)
+    node.destroy_node()
+    rclpy.shutdown()
+
+if __name__ == '__main__':
+    main()
+```
+
+## Choosing the Right Platform
+
+Use this decision framework to match your situation to a platform.
+
+### Decision Matrix
+
+| Your Goal | Budget | Recommended Platform |
+|-----------|--------|---------------------|
+| Learn ROS 2 and perception | $0 | Simulation (Gazebo) |
+| Train RL policies for locomotion | $0-700 | Simulation (Isaac Sim) + GPU workstation |
+| Learn navigation and SLAM | $1,100 | TurtleBot 4 Lite |
+| Learn manipulation and grasping | $550 | Open Manipulator-X |
+| Full mobile manipulation | $1,600-2,500 | TurtleBot 4 + Open Manipulator-X |
+| Understand hardware from scratch | $100-200 | DIY Arduino servo robot |
+| Research humanoid locomotion | $16,000+ | Unitree G1 |
+| Production humanoid deployment | $90,000+ | Unitree H1 / Agility Digit |
+
+### Progression Path
+
+The recommended learning progression builds skills incrementally:
+
+```
+Phase 1 (Months 1-3):  Simulation Only
+│  Gazebo + ROS 2 basics
+│  Isaac Sim + RL fundamentals
+│  Cost: $0 (or workstation GPU if needed)
+│
+▼
+Phase 2 (Months 3-6):  First Physical Robot
+│  TurtleBot 4 Lite OR Open Manipulator-X
+│  Real sensor data, real-world noise
+│  Sim-to-real transfer experiments
+│  Cost: $550-1,100
+│
+▼
+Phase 3 (Months 6-12): Edge Deployment
+│  Add Jetson Orin Nano
+│  Deploy inference models on-robot
+│  Camera + IMU integration
+│  Cost: $500 additional
+│
+▼
+Phase 4 (Year 2+):  Advanced Platforms
+│  Mobile manipulator OR humanoid
+│  Whole-body control, dexterous manipulation
+│  Cost: $2,500-16,000+
+```
+
+### What Matters Most at Each Stage
+
+```python
+#!/usr/bin/env python3
+"""platform_advisor.py -- Recommend a platform based on your priorities."""
+
+def recommend_platform(
+    budget: int,
+    primary_interest: str,
+    experience_months: int,
+    has_gpu: bool,
+) -> str:
+    """Suggest a robot platform based on learner profile.
+
+    Args:
+        budget: Maximum budget in USD.
+        primary_interest: One of 'perception', 'navigation', 'manipulation',
+                          'locomotion', 'full_stack'.
+        experience_months: Months of robotics experience.
+        has_gpu: Whether you have an NVIDIA RTX GPU.
+    """
+
+    if experience_months < 3:
+        if has_gpu:
+            return (
+                "Start with Isaac Sim for RL and Gazebo for ROS 2. "
+                "No physical robot needed yet."
+            )
+        return (
+            "Start with Gazebo (CPU-only) for ROS 2 fundamentals. "
+            "Add a GPU when ready for Isaac Sim."
+        )
+
+    if budget < 600:
+        if primary_interest == 'manipulation':
+            return "Open Manipulator-X ($550) -- best value for grasping skills."
+        return "DIY Arduino build ($100-200) + simulation for everything else."
+
+    if budget < 1500:
+        if primary_interest in ('navigation', 'perception'):
+            return "TurtleBot 4 Lite ($1,100) -- the ROS 2 reference for nav/SLAM."
+        return "Open Manipulator-X ($550) + Jetson Orin Nano ($500) for edge AI."
+
+    if budget < 5000:
+        return (
+            "TurtleBot 4 + Open Manipulator-X ($2,500) -- mobile manipulation "
+            "covers the widest range of skills."
+        )
+
+    if budget < 20000:
+        if primary_interest == 'locomotion':
+            return "Unitree G1 ($16,000) -- the most accessible humanoid."
+        return (
+            "Full mobile manipulator ($2,500) + Jetson Orin NX ($900) + "
+            "sensor suite ($500) for a professional dev setup."
+        )
+
+    return (
+        "Unitree G1 or H1 -- full humanoid platform for research "
+        "and advanced development."
+    )
+
+if __name__ == '__main__':
+    # Example profiles
+    profiles = [
+        {"budget": 0, "primary_interest": "perception",
+         "experience_months": 0, "has_gpu": False},
+        {"budget": 1200, "primary_interest": "navigation",
+         "experience_months": 4, "has_gpu": True},
+        {"budget": 3000, "primary_interest": "manipulation",
+         "experience_months": 8, "has_gpu": True},
+        {"budget": 20000, "primary_interest": "locomotion",
+         "experience_months": 18, "has_gpu": True},
+    ]
+
+    for p in profiles:
+        rec = recommend_platform(**p)
+        print(f"\nBudget: ${p['budget']:,}, Interest: {p['primary_interest']}, "
+              f"Experience: {p['experience_months']}mo")
+        print(f"  -> {rec}")
+```
+
+## Peripheral Sensors Worth Adding
+
+Regardless of platform, these sensors expand your capabilities:
+
+| Sensor | Model | Price | What It Adds |
+|--------|-------|-------|-------------|
+| Depth Camera | Intel RealSense D435i | $300 | Stereo depth + IMU |
+| 2D LiDAR | RPLIDAR A1 | $100 | 360-degree 2D scan for SLAM |
+| 3D LiDAR | Unitree L1 | $400 | 3D point clouds |
+| IMU | BNO055 (I2C) | $30 | 9-axis orientation |
+| Force/Torque | ATI Mini45 | $3,000+ | Contact force sensing |
+| Microphone Array | ReSpeaker USB | $80 | Voice commands (Module 6) |
+
+## Summary
+
+The best robot platform is the one that keeps you learning and building. Start in simulation, get comfortable with ROS 2, and then invest in physical hardware when you have specific skills to practice. The simulation-to-real pipeline means that time spent in Gazebo or Isaac Sim is never wasted -- those same algorithms will run on your physical robot with minimal changes.
+
+## Exercises
+
+1. Launch a TurtleBot 4 simulation in Gazebo and drive it through a warehouse environment using keyboard teleop.
+2. Create a URDF model for a 6-servo tabletop humanoid torso and visualize it in RViz.
+3. Using the `platform_advisor.py` script, determine the recommended platform for your specific situation. Justify whether you agree or disagree with its recommendation.
+4. Research the Unitree G1 SDK documentation and list five ROS 2 topics it publishes.
+
+## Next Steps
+
+With your hardware selected and configured, return to the earlier modules to apply your setup:
+- [Module 2: ROS 2 Fundamentals](/ros2-fundamentals/) -- now with real hardware
+- [Module 3: Gazebo Simulation](/gazebo-simulation/) -- verify your GPU setup
+- [Module 4: NVIDIA Isaac Platform](/nvidia-isaac-platform/) -- requires RTX GPU
+- [Module 7: Capstone Project](/capstone-project/) -- integrate everything
