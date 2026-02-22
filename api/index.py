@@ -1,13 +1,13 @@
 """
-Vercel Serverless entry point for FastAPI.
-Ensures the api/ directory is on the Python path so all imports resolve.
+Vercel Serverless entry point.
+The api/ directory is auto-detected by Vercel as serverless functions.
 """
 import os
 import sys
 
-# Add the api/ directory to Python path so main.py can import routers, services, db
-api_dir = os.path.dirname(os.path.abspath(__file__))
-if api_dir not in sys.path:
-    sys.path.insert(0, api_dir)
+# Ensure api/ is on path for sub-module imports
+_dir = os.path.dirname(os.path.abspath(__file__))
+if _dir not in sys.path:
+    sys.path.insert(0, _dir)
 
-from main import app  # noqa: F401
+from main import app  # noqa: F401 — Vercel auto-detects the `app` ASGI variable
