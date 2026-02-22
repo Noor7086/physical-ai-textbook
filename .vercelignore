@@ -3,6 +3,9 @@ specs/
 tests/
 .specify/
 .claude/
+.git/
 *.md
 !README.md
+!docusaurus/**/*.md
+!docusaurus/**/*.mdx
 docusaurus/static/podcasts/*.mp3
