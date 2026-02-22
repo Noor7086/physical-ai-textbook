@@ -1,8 +1,8 @@
 """Authentication router for user signup, login, and profile management."""
 from fastapi import APIRouter, HTTPException, Depends
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from pydantic import BaseModel, EmailStr
-from typing import Optional
+from pydantic import BaseModel, EmailStr, ConfigDict
+from typing import Optional, Any
 from enum import Enum
 from datetime import datetime
 import uuid
@@ -45,6 +45,11 @@ class LoginRequest(BaseModel):
     """Request model for user login."""
     email: EmailStr
     password: str
+
+
+def _str_ids(d: dict) -> dict:
+    """Convert any UUID values to strings in a dict."""
+    return {k: str(v) if hasattr(v, 'hex') and hasattr(v, 'int') else v for k, v in d.items()}
 
 
 class User(BaseModel):
@@ -121,11 +126,12 @@ async def signup(request: SignupRequest):
             password=request.password,
             profile=request.profile.model_dump(),
         )
+        user_data = _str_ids(result["user"])
         return AuthResponse(
             user=User(
-                id=result["user"]["id"],
-                email=result["user"]["email"],
-                created_at=result["user"]["created_at"],
+                id=user_data["id"],
+                email=user_data["email"],
+                created_at=user_data["created_at"],
             ),
             token=result["token"],
             expires_at=result["expires_at"],
@@ -147,11 +153,12 @@ async def login(request: LoginRequest):
             email=request.email,
             password=request.password,
         )
+        user_data = _str_ids(result["user"])
         return AuthResponse(
             user=User(
-                id=result["user"]["id"],
-                email=result["user"]["email"],
-                created_at=result["user"]["created_at"],
+                id=user_data["id"],
+                email=user_data["email"],
+                created_at=user_data["created_at"],
             ),
             token=result["token"],
             expires_at=result["expires_at"],
@@ -183,6 +190,9 @@ async def get_current_user_profile(user: dict = Depends(require_auth)):
     """
     try:
         profile = await auth_service.get_user_with_profile(user["id"])
+        profile = _str_ids(profile)
+        if profile.get("profile"):
+            profile["profile"] = _str_ids(profile["profile"])
         return UserWithProfile(**profile)
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
